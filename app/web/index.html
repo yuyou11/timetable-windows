@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>时间规划表</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============ 左侧导航 ============ -->
+<aside class="sidebar">
+  <div class="brand">
+    <div class="brand-mark">时</div>
+    <div class="brand-text">
+      <strong>时间规划表</strong>
+      <span id="brandSub">加载中…</span>
+    </div>
+  </div>
+
+  <nav class="nav">
+    <button class="nav-item active" data-page="today">
+      <span class="nav-icon">◉</span><span>今天</span>
+    </button>
+    <button class="nav-item" data-page="week">
+      <span class="nav-icon">▦</span><span>课表</span>
+    </button>
+    <button class="nav-item" data-page="courses">
+      <span class="nav-icon">✎</span><span>课程编辑</span>
+    </button>
+    <button class="nav-item" data-page="templates">
+      <span class="nav-icon">◷</span><span>作息编辑</span>
+    </button>
+    <button class="nav-item" data-page="data">
+      <span class="nav-icon">⇅</span><span>导入导出</span>
+    </button>
+    <button class="nav-item" data-page="settings">
+      <span class="nav-icon">⚙</span><span>设置</span>
+    </button>
+  </nav>
+
+  <div class="sidebar-foot">
+    <div class="pill" id="statusPill">未开启</div>
+  </div>
+</aside>
+
+<!-- ============ 右侧内容 ============ -->
+<main class="content">
+
+  <!-- ---------- 今天 ---------- -->
+  <section class="page active" id="page-today">
+    <header class="page-head">
+      <div>
+        <h1 id="todayDate">—</h1>
+        <p class="sub" id="todaySub">—</p>
+      </div>
+      <button class="btn ghost" id="btnRefreshToday">刷新</button>
+    </header>
+
+    <div class="card now-card">
+      <div class="now-label">此刻</div>
+      <div class="now-title" id="nowTitle">—</div>
+      <div class="now-meta" id="nowMeta">—</div>
+      <div class="progress"><div class="progress-fill" id="nowProgress"></div></div>
+      <div class="now-next" id="nowNext">—</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>明天</h2>
+        <span class="sub" id="tomorrowHead">—</span>
+      </div>
+      <div class="tomorrow">
+        <div class="wake">
+          <span class="wake-label">起床</span>
+          <span class="wake-time" id="tomorrowWake">—</span>
+        </div>
+        <div class="tomorrow-lines">
+          <div id="tomorrowFirst">—</div>
+          <div id="tomorrowCourses">—</div>
+          <div class="dim" id="tomorrowLast">—</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>今天的时间线</h2></div>
+      <div class="timeline" id="timeline"></div>
+    </div>
+  </section>
+
+  <!-- ---------- 课表 ---------- -->
+  <section class="page" id="page-week">
+    <header class="page-head">
+      <div>
+        <h1 id="weekTitle">—</h1>
+        <p class="sub" id="weekRange">—</p>
+      </div>
+      <div class="week-nav">
+        <button class="btn ghost" id="prevWeek">← 上一周</button>
+        <button class="btn ghost" id="curWeek">回到本周</button>
+        <button class="btn ghost" id="nextWeek">下一周 →</button>
+      </div>
+    </header>
+
+    <div class="card">
+      <div class="day-hints" id="dayHints"></div>
+      <table class="grid" id="weekGrid"></table>
+      <p class="hint">点有课的格子可以看完整周次和教室。空白表示这一周不上这门课。</p>
+    </div>
+  </section>
+
+  <!-- ---------- 课程编辑 ---------- -->
+  <section class="page" id="page-courses">
+    <header class="page-head">
+      <div>
+        <h1>课程编辑</h1>
+        <p class="sub">在这里改课表会直接写进数据文件，等价于手改 JSON，但不用记格式</p>
+      </div>
+      <div class="row-gap">
+        <button class="btn primary" id="addCourse">+ 添加课程</button>
+        <button class="btn ghost danger" id="clearCourses">清空全部</button>
+        <button class="btn ghost" id="resetCourses">恢复内置</button>
+      </div>
+    </header>
+    <div class="card">
+      <div class="course-list" id="courseList"></div>
+    </div>
+  </section>
+
+  <!-- ---------- 作息编辑 ---------- -->
+  <section class="page" id="page-templates">
+    <header class="page-head">
+      <div>
+        <h1>作息编辑</h1>
+        <p class="sub">每一格就是一天里的一个时段。改完立刻生效，悬浮球和今天页都会跟着变</p>
+      </div>
+      <button class="btn ghost" id="resetTemplates">恢复内置模板</button>
+    </header>
+
+    <div class="card">
+      <div class="type-tabs" id="typeTabs"></div>
+      <div class="type-info" id="typeInfo"></div>
+      <div class="row-gap" style="margin-bottom: 10px;">
+        <button class="btn primary" id="changeWake">改起床时间</button>
+        <span class="hint" style="margin: 0; align-self: center;">
+          「睡觉」和「起床、洗漱」是两格，用这个按钮一次改好
+        </span>
+      </div>
+      <div class="block-list" id="blockList"></div>
+      <button class="btn primary block-add" id="addBlock">+ 添加一格</button>
+    </div>
+  </section>
+
+  <!-- ---------- 数据 ---------- -->
+  <section class="page" id="page-data">
+    <header class="page-head">
+      <div>
+        <h1>导入导出</h1>
+        <p class="sub">数据是标准 JSON，手机版和电脑版通用</p>
+      </div>
+      <button class="btn ghost" id="openFolder">打开数据文件夹</button>
+    </header>
+
+    <div class="card">
+      <h2>导出</h2>
+      <p class="sub">导出后可以发给同学、备份，或者用文本编辑器改</p>
+      <div class="row-gap">
+        <button class="btn primary" id="exportSimple">导出课表</button>
+        <button class="btn" id="exportFull">导出课表 + 作息模板</button>
+        <button class="btn" id="copyJson">复制到剪贴板</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>导入</h2>
+      <p class="sub">支持手机版导出的文件。导入前会先显示预览，确认后才写入</p>
+      <div class="row-gap">
+        <button class="btn primary" id="importFile">选择文件导入</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>不会写 JSON？让 AI 替你转</h2>
+      </div>
+      <p class="sub">
+        提示词里已经填好了你当前的学期信息（名称、第 1 周周一、总周数），
+        所以 AI 不会在这些地方猜错 —— 这些值错了，整张表的时间会全部错位。
+      </p>
+      <div class="row-gap">
+        <button class="btn primary" id="copyPromptCourse">复制「课表」提示词</button>
+        <button class="btn" id="copyPromptTemplate">复制「作息模板」提示词</button>
+        <button class="btn" id="copyPromptFix">复制「报错修复」提示词</button>
+      </div>
+      <p class="hint">
+        用法：复制提示词 → 贴给豆包 / DeepSeek / Kimi / ChatGPT →
+        再把课表截图或文件一起发过去 → 它吐出的 JSON 存成 .json 文件 → 用上面的「选择文件导入」。
+      </p>
+    </div>
+  </section>
+
+  <!-- ---------- 设置 ---------- -->
+  <section class="page" id="page-settings">
+    <header class="page-head">
+      <div>
+        <h1>设置</h1>
+        <p class="sub">学期信息、提醒、悬浮球</p>
+      </div>
+    </header>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>桌面悬浮窗</h2>
+        <label class="switch"><input type="checkbox" id="swBall"><span></span></label>
+      </div>
+      <p class="sub">
+        在桌面角落显示一块小卡片，随时看得到此刻在做什么、还剩多久。
+      </p>
+      <p class="sub" style="margin-top:8px">
+        <strong>贴边自动隐藏：</strong>把卡片拖到屏幕边缘松手，它会缩成一个小方块，
+        只留一个箭头在外面。鼠标移上去自动滑出来，移开又缩回去 —— 平时完全不占地方。
+      </p>
+      <p class="hint" style="margin-top:6px">
+        · 拖到任意位置 · 单击卡片打开主窗口 · 想取消隐藏就把卡片从边缘拖回来
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>课前提醒</h2>
+        <div class="stepper">
+          <button class="btn ghost" data-lead="-1">−</button>
+          <span id="leadValue">关闭</span>
+          <button class="btn ghost" data-lead="1">+</button>
+        </div>
+      </div>
+      <p class="sub">每节课开始前若干分钟提醒一次。0 表示关闭。</p>
+    </div>
+
+    <div class="card">
+      <h2>学期</h2>
+      <div class="field-row">
+        <label>学期名称</label>
+        <input type="text" id="termName" class="input">
+      </div>
+      <div class="field-row">
+        <label>第 1 周的周一</label>
+        <input type="date" id="termStart" class="input">
+      </div>
+      <div class="field-row">
+        <label>总周数</label>
+        <input type="number" id="termWeeks" class="input" min="1" max="30">
+      </div>
+      <p class="hint" id="termHint"></p>
+      <button class="btn primary" id="saveTerm">保存学期设置</button>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>启用哪些日型</h2>
+        <button class="btn ghost" id="resetDayTypes">恢复默认</button>
+      </div>
+      <p class="sub">
+        程序每天按日历算出「今天是哪种日」，再从下面<strong>勾选的</strong>日型里挑一套模板。
+        没勾的那种会落到「回落到」选的那一套上。
+      </p>
+      <div class="daytype-list" id="dayTypeList"></div>
+      <div class="field-row">
+        <label>回落到</label>
+        <select id="dayTypeFallback" class="input"></select>
+      </div>
+      <p class="hint" id="dayTypeHint"></p>
+      <button class="btn primary" id="saveDayTypes">保存日型设置</button>
+    </div>
+
+    <div class="card">
+      <h2>关于</h2>
+      <p class="sub">
+        时间规划表 · 电脑版 v1.0<br>
+        数据格式 timetable v3 —— 与手机版通用<br>
+        所有数据存在本机，不联网、不上传
+      </p>
+    </div>
+  </section>
+
+</main>
+
+<!-- ============ 弹窗 ============ -->
+<div class="modal-mask" id="modalMask">
+  <div class="modal">
+    <h3 id="modalTitle">标题</h3>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-actions" id="modalActions"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

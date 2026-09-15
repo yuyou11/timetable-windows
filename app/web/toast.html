@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>提醒</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      /* 不透明背景。原来是 transparent，靠窗口透明来"浮"在桌面上，
+         但 WebView2 在部分环境下不会真正渲染透明，会露出一个突兀的方框。
+         现在改成不透明的小卡片，窗口底色和卡片一致，不依赖透明能力。 */
+      background: #ffffff;
+      overflow: hidden;
+      font-family: "Microsoft YaHei", "PingFang SC", -apple-system, sans-serif;
+      user-select: none;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      html, body { background: #181b21; }
+    }
+
+    #card {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      gap: 11px;
+      align-items: flex-start;
+      padding: 14px 16px;
+      border: 1px solid #dfe3e8;
+      border-radius: 10px;
+      background: #ffffff;
+      opacity: 0;
+      transition: opacity .2s ease;
+    }
+
+    #card.show { opacity: 1; }
+
+    /* 左侧竖条：和课表里的颜色体系一致，一眼看出是「上课」还是别的 */
+    #bar {
+      flex: 0 0 4px;
+      align-self: stretch;
+      border-radius: 2px;
+      background: #ef4444;
+    }
+
+    #body { flex: 1; min-width: 0; }
+
+    #title {
+      font-size: 14.5px;
+      font-weight: 700;
+      color: #1a1d23;
+      line-height: 1.35;
+      word-break: break-word;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    #text {
+      margin-top: 3px;
+      font-size: 12px;
+      color: #6b7280;
+      font-variant-numeric: tabular-nums;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      #card { background: #181b21; border-color: #2f3540; }
+      #title { color: #e8eaed; }
+      #text { color: #9aa1ac; }
+    }
+  </style>
+</head>
+<body>
+  <div id="card">
+    <div id="bar"></div>
+    <div id="body">
+      <div id="title">—</div>
+      <div id="text">—</div>
+    </div>
+  </div>
+
+  <script>
+    /* 提示条。
+       窗口是提前创建好藏起来的，到点由 Python 调 showToast() 填内容再显示。
+
+       每次显示都重新触发一次入场动画 —— 直接改内容的话，
+       用户会看到文字「跳」一下，没有「弹出来」的感觉。 */
+    window.showToast = function (data) {
+      const card = document.getElementById('card');
+      document.getElementById('title').textContent = data.title || '';
+      document.getElementById('text').textContent = data.body || '';
+
+      card.classList.remove('show');
+      // 强制浏览器重新计算样式，否则连续两次加同一个 class 不会重放动画
+      void card.offsetWidth;
+      card.classList.add('show');
+    };
+
+    /* 注意：pulse() 是**悬浮窗**那边的东西（ball.js 里定义）。
+       这里不要再定义一遍 —— 两个窗口共用同一个 js_api 对象，
+       但各自有独立的 window，所以同名函数不会互相覆盖。
+       之前这里也写了一个 pulse 去操作 #ball，而 toast.html 里
+       根本没有那个元素，属于复制粘贴留下的死代码。 */
+  </script>
+</body>
+</html>

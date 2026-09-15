@@ -1,0 +1,39 @@
+{
+  "_说明": [
+    "教务导出表格的**通用样例** —— 示例大学，不是任何人的真实课表。",
+    "字段含义见 tools/convert_schedule.py 的模块说明。",
+    "weekday 接受「周一」「星期一」「礼拜一」这类写法。",
+    "weeks 保留教务的原样写法：(单)/(双) 会被脚本转成 /2 步长。",
+    "place 可以为空字符串 —— 教务偶尔不给教室（比如体育课）。"
+  ],
+  "term": {
+    "name": "示例大学 2026 级 · 大一上",
+    "startDate": "2026-09-07",
+    "totalWeeks": 19
+  },
+  "rows": [
+    { "name": "大学英语", "weeks": "2-4周,6-17周", "weekday": "星期一", "start": 1, "end": 2, "place": "教一-101" },
+    { "name": "高等数学", "weeks": "2-4周,6-17周", "weekday": "星期一", "start": 3, "end": 4, "place": "教一-203" },
+    { "name": "中国近现代史纲要", "weeks": "15-17周", "weekday": "星期一", "start": 5, "end": 6, "place": "教二-105" },
+    { "name": "军事理论", "weeks": "2-4周,6-14周", "weekday": "星期一", "start": 7, "end": 8, "place": "教二-311" },
+
+    { "name": "程序设计基础", "weeks": "2-7周,9-17周", "weekday": "星期二", "start": 3, "end": 4, "place": "实验楼-201" },
+    { "name": "大学物理实验", "weeks": "4周", "weekday": "星期二", "start": 5, "end": 6, "place": "实验楼-305" },
+    { "name": "思想道德与法治", "weeks": "2-7周,9-17周", "weekday": "星期二", "start": 7, "end": 8, "place": "教一-108" },
+
+    { "name": "高等数学", "weeks": "2-7周,9-17周", "weekday": "星期三", "start": 1, "end": 2, "place": "教一-203" },
+    { "name": "形势与政策", "weeks": "5-7周,9周", "weekday": "星期三", "start": 3, "end": 4, "place": "教二-220" },
+    { "name": "中国近现代史纲要", "weeks": "13-17周", "weekday": "星期三", "start": 7, "end": 8, "place": "教二-105" },
+    { "name": "人工智能导论", "weeks": "3-7周,9-11周", "weekday": "星期三", "start": 9, "end": 10, "place": "教三-401" },
+
+    { "name": "大学物理", "weeks": "2-3周,5-17周", "weekday": "星期四", "start": 3, "end": 4, "place": "教二-108" },
+    { "name": "大学生职业生涯规划", "weeks": "3-9周(单)", "weekday": "星期四", "start": 5, "end": 6, "place": "教一-215" },
+    { "name": "数据结构", "weeks": "3-17周(单)", "weekday": "星期四", "start": 7, "end": 8, "place": "实验楼-201" },
+    { "name": "程序设计基础", "weeks": "2周", "weekday": "星期四", "start": 7, "end": 8, "place": "实验楼-201" },
+
+    { "name": "高等数学", "weeks": "2周,5-16周", "weekday": "星期五", "start": 3, "end": 4, "place": "教一-203" },
+    { "name": "思想道德与法治", "weeks": "2周,5-12周", "weekday": "星期五", "start": 5, "end": 6, "place": "教一-108" },
+    { "name": "大学体育", "weeks": "2周,5-16周", "weekday": "星期五", "start": 7, "end": 8, "place": "操场 / 体育馆" },
+    { "name": "音乐鉴赏", "weeks": "5-12周", "weekday": "星期五", "start": 9, "end": 10, "place": "教三-102" }
+  ]
+}
