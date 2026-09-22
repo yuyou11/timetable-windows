@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from datetime import date
 from pathlib import Path
 from typing import Any, Optional
@@ -66,23 +67,35 @@ class Store:
     def __init__(self, path: Optional[Path] = None) -> None:
         self.path = path or (data_dir() / "data.json")
         self._data: dict[str, Any] = {}
+
+        #: 读写这把锁是**必须**的：一个 Store 被两个线程共用 ——
+        #: UI 线程在响应点击时 `save()`，提醒线程每分钟 `load()` 一次、
+        #: 发出提醒时还会写 `last_reminder_key`（也会 `save()`）。
+        #:
+        #: 不加锁的后果不是「偶尔慢一点」，是**写坏数据文件**：
+        #: `save()` 写的是**固定名**的临时文件（`data.tmp`），两个线程
+        #: 同时写同一个 tmp 再各自 replace，最后留下的是谁写到一半的那份。
+        #: 用 RLock 而不是 Lock，是因为有的路径会在持锁时再调一次 save。
+        self._lock = threading.RLock()
+
         self.load()
 
     # ---------------- 读写 ----------------
 
     def load(self) -> None:
-        if self.path.exists():
-            try:
-                self._data = json.loads(self.path.read_text(encoding="utf-8"))
-                if not isinstance(self._data, dict):
+        with self._lock:
+            if self.path.exists():
+                try:
+                    self._data = json.loads(self.path.read_text(encoding="utf-8"))
+                    if not isinstance(self._data, dict):
+                        self._data = {}
+                except (json.JSONDecodeError, OSError):
+                    # 文件坏了不能让程序起不来 —— 备份一份再从默认值开始，
+                    # 用户至少还有机会手工抢救原来的数据
+                    self._backup_broken_file()
                     self._data = {}
-            except (json.JSONDecodeError, OSError):
-                # 文件坏了不能让程序起不来 —— 备份一份再从默认值开始，
-                # 用户至少还有机会手工抢救原来的数据
-                self._backup_broken_file()
+            else:
                 self._data = {}
-        else:
-            self._data = {}
 
     def _backup_broken_file(self) -> None:
         try:
@@ -92,15 +105,20 @@ class Store:
             pass
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        # 先写临时文件再替换：这样即使写到一半断电，也不会毁掉原文件。
-        # 这个手法在任何「覆盖重要文件」的场景都适用。
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(
-            json.dumps(self._data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        tmp.replace(self.path)
+        with self._lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            # 先写临时文件再替换：这样即使写到一半断电，也不会毁掉原文件。
+            # 这个手法在任何「覆盖重要文件」的场景都适用。
+            #
+            # ⚠️ 临时文件名是**固定**的（`data.tmp`），所以整个写入过程必须
+            # 持锁 —— 否则两个线程会同时写同一个 tmp 再各自 replace，
+            # 最后落盘的是谁写到一半的那份（见 __init__ 里 _lock 的说明）。
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(
+                json.dumps(self._data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            tmp.replace(self.path)
 
     # ---------------- 首次启动 ----------------
 
