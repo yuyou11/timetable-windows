@@ -44,6 +44,11 @@ DefaultDirName={localappdata}\Programs\{#AppName}
 DefaultGroupName={#AppName}
 ; 不显示"选择程序组"那一页 —— 只有一项，问了也是白问
 DisableProgramGroupPage=yes
+; ⚠️ **必须显式写 no**。默认值是 auto —— 那样「覆盖安装」时会跳过这一页，
+; 用户就只能装回上一次那个目录，想换盘得先卸载。
+; 显式 no 之后每次都问，用户可以直接点「浏览…」装到别的盘。
+; （默认目录在 C 盘是因为 {localappdata} 本身在 C。）
+DisableDirPage=no
 ; 只给当前用户装，不要管理员
 PrivilegesRequired=lowest
 ; 产物落在 dist\installer\（相对本文件所在目录）

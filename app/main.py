@@ -840,8 +840,32 @@ class App:
         `self._ball_hwnd` 只在 `_polish` 里拿到过一次。拿不到（测试、窗口刚
         建出来）就返回 False，让 `place_window` 退回两次调用的做法 ——
         那条路完全不碰真实窗口，所以测试跑不到 Win32 上去。
+
+        ## ⚠️ 这里必须做一次「逻辑 → 物理」的换算
+
+        传进来的 x/y/w/h 是**逻辑像素**（`dock` 和 `self._ball_x` 那一整套都是），
+        而 `SetWindowPos` 要的是**物理像素**（`run.py` 里声明了 DPI 感知）。
+        两边约定不同，直接接上就会差一个缩放系数。
+
+        漏掉这一步的症状特别绕，值得记：
+
+            平时          位置整体向左偏 1/4 屏、贴不上边，尺寸还小一圈
+            拖动的时候    突然跳到正确位置 —— 因为拖动走的是 pywebview 的
+                          `move()`，那个是逻辑像素、内部自己换算
+            松手          又回到偏的那个位置 —— 又走回这里了
+
+        「有时对有时错」的几何 bug，先怀疑是不是**两条路径的单位不一致**。
+
+        （README「单位约定」那节说 `ui_scale()` 只该在 `work_area()` 里用 ——
+        那是针对「不要拿它去乘 pywebview 的值」说的。反过来，**要调 Win32
+        就必须用它把逻辑换回物理**，这里是第二个合法用途。）
         """
-        return winutil.set_window_rect(self._ball_hwnd, x, y, w, h)
+        scale = ui_scale() or 1.0
+        return winutil.set_window_rect(
+            self._ball_hwnd,
+            round(x * scale), round(y * scale),
+            round(w * scale), round(h * scale),
+        )
 
     def _push_ball_layout(self) -> None:
         """告诉网页该显示「展开的卡片」还是「收起的小方框」"""

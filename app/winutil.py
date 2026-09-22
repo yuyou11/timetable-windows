@@ -140,6 +140,11 @@ WS_THICKFRAME = 0x00040000    # 可调边框 —— DWM 的系统阴影就挂在
 
 def set_window_rect(hwnd: int, x: int, y: int, w: int, h: int) -> bool:
     """
+    ⚠️ 这里收的是**物理像素** —— 和 `window_rect()` / `cursor_pos()` 的返回值
+    同一套单位。调用方如果手上是逻辑像素（`dock`、`App._ball_x` 那一整套），
+    必须先乘 `screen.ui_scale()` 换过来，否则整体偏一个缩放系数。
+    """
+    """
     **一次** `SetWindowPos` 同时改位置和尺寸。
 
     ## 为什么必须合成一次

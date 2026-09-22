@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from app.main import place_window
 
@@ -118,6 +119,68 @@ class TestPlaceWindowOrder(unittest.TestCase):
         """
         self.assertEqual(["move", "resize"],
                          order(100, 0, 300, 50, 200, 0, 200, 100))
+
+
+class TestSetBallRectUnits(unittest.TestCase):
+    """
+    落位必须做「逻辑 → 物理」的换算。
+
+    ## 为什么这条测试必须存在
+
+    `dock` / `App._ball_x` 那一整套是**逻辑像素**，`SetWindowPos` 要的是
+    **物理像素**（`run.py` 里声明了 DPI 感知）。两边直接接上就差一个缩放系数。
+
+    这个 bug 的症状特别绕，靠肉眼几乎定位不到：
+
+        平时          位置偏 1/4 屏、贴不上边，尺寸还小一圈
+        拖动的时候    突然跳到正确位置（那条路走 pywebview，单位是对的）
+        松手          又回到偏的位置
+
+    「有时对有时错」的几何 bug，先怀疑**两条路径单位不一致**。
+    """
+
+    def test_converts_logical_to_physical(self):
+        from app import main as main_mod
+
+        captured = {}
+
+        def fake_set_rect(hwnd, x, y, w, h):
+            captured.update(hwnd=hwnd, x=x, y=y, w=w, h=h)
+            return True
+
+        app = main_mod.App.__new__(main_mod.App)   # 不跑 __init__，够用了
+        app._ball_hwnd = 4242
+
+        with mock.patch.object(main_mod.winutil, "set_window_rect", fake_set_rect), \
+                mock.patch.object(main_mod, "ui_scale", lambda: 1.25):
+            ok = app._set_ball_rect(100, 200, 244, 104)
+
+        self.assertTrue(ok)
+        self.assertEqual({"hwnd": 4242, "x": 125, "y": 250, "w": 305, "h": 130},
+                         captured,
+                         "逻辑像素没换算成物理像素就直接喂给 SetWindowPos 了")
+
+    def test_no_hwnd_means_no_win32_call(self):
+        """
+        拿不到 HWND 时一次 Win32 都不许碰（测试绝不能动真实窗口）。
+
+        ⚠️ 这里**不打桩** `set_window_rect` —— 第一版打了桩，然后指望
+        `_set_ball_rect` 返回 False。可它只是把结果透传，桩子返回 True 它就
+        返回 True。**打桩掉被测对象，等于什么都没测**，那条测试当时是假的。
+
+        真正要盯的是 `winutil.set_window_rect` 里那道 `if not hwnd: return`
+        守卫：它必须在碰任何 Win32 API 之前就收手。一旦它去找窗口/动窗口，
+        同时开着的另一个实例就会被误伤（这个坑真实发生过）。
+        """
+        from app import main as main_mod
+        from app import winutil
+
+        self.assertFalse(winutil.set_window_rect(0, 1, 2, 3, 4),
+                         "hwnd=0 时必须直接返回 False，不许调 SetWindowPos")
+
+        app = main_mod.App.__new__(main_mod.App)
+        app._ball_hwnd = 0
+        self.assertFalse(app._set_ball_rect(1, 2, 3, 4))
 
 
 if __name__ == "__main__":
