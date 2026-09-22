@@ -1,7 +1,7 @@
 """
-设置页那几个开关，和学期信息。
+设置页那几个开关、学期信息、界面主题。
 
-（由 `tools/split_api.py` 从 `api.py` 原样切出，**一字未改**。）
+（由 `tools/split_api.py` 从 `api.py` 原样切出；之后在这里加了 `set_theme`。）
 """
 
 from __future__ import annotations
@@ -10,6 +10,10 @@ from datetime import date
 from typing import Any
 
 from . import builtin_data, engine
+from .store import THEMES
+
+#: 主题三档的中文名，给「已切换到…」那句提示用。
+THEME_LABEL = {"system": "跟随系统", "light": "始终浅色", "dark": "始终深色"}
 
 
 class SettingsMixin:
@@ -24,6 +28,30 @@ class SettingsMixin:
 
     def set_ball_enabled(self, value: bool) -> dict[str, Any]:
         return self._apply_setting("ball_enabled", bool(value))
+
+    def set_theme(self, value: str) -> dict[str, Any]:
+        """
+        换界面主题：`system`（跟随系统）/ `light` / `dark`。
+
+        ⚠️ **返回的 message 里必须写明「重启后生效」** —— 点了没反应会让人
+        以为坏了。为什么不能立刻生效：小窗口的窗口底色只能在创建时定，
+        运行期改不了，它会在四个圆角处露出来（见 `store.theme` 的说明）。
+
+        不认识的取值**如实报错**，不要静默当成某一档 —— 那会让用户以为
+        自己选的生效了。
+        """
+        text = str(value)
+        if text not in THEMES:
+            return {"ok": False,
+                    "message": f"不认识的主题：{text}（只支持 system / light / dark）"}
+
+        self.store.theme = text
+        self._notify_settings_changed()
+        return {
+            "ok": True,
+            "message": f"已切换到「{THEME_LABEL[text]}」，重启后生效",
+            "theme": text,
+        }
 
     def set_remind_lead(self, minutes: int) -> dict[str, Any]:
         return self._apply_setting("remind_lead", int(minutes))

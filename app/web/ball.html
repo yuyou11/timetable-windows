@@ -69,8 +69,12 @@
       --ball-anim-ms: 160ms;
     }
 
+    /* 主题三档（设置页里选）：跟随系统 / 始终浅色 / 始终深色。
+       和 style.css 是同一套约定 —— 跟随系统靠 @media，强制档靠
+       `<html data-theme="...">`（启动时由 Python 推过来）。
+       深色那套写了两遍，理由见 style.css 里的同段说明。 */
     @media (prefers-color-scheme: dark) {
-      :root {
+      :root:not([data-theme='light']) {
         --surface: #181b21;
         --border: #2f3540;
         --text: #e8eaed;
@@ -80,6 +84,17 @@
         --hover-bg: #2a2f38;
         --dock-tab-bg: #23272f;
       }
+    }
+
+    :root[data-theme='dark'] {
+      --surface: #181b21;
+      --border: #2f3540;
+      --text: #e8eaed;
+      --text-dim: #9aa1ac;
+      --btn-bg: #23272f;
+      --btn-border: #2f3540;
+      --hover-bg: #2a2f38;
+      --dock-tab-bg: #23272f;
     }
 
     html, body {
@@ -331,6 +346,16 @@
 
     #panel.pulse { animation: pulse-kf .55s ease-in-out 2; }
   </style>
+  <script>
+    /* 主题的强制档。和 index.html 里那段一模一样 —— 三个窗口是三个独立页面，
+       拿不到同一份全局，只能各写一份（同 KIND_COLOR 的处理方式）。
+       跟随系统是纯 CSS（@media）就成立的，这里只管「始终浅色/深色」。 */
+    window.__applyTheme = function (t) {
+      if (t === 'light' || t === 'dark') {
+        document.documentElement.setAttribute('data-theme', t);
+      }
+    };
+  </script>
 </head>
 <body class="layout-card">
 

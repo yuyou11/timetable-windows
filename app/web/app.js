@@ -79,6 +79,14 @@ function bindEvents() {
 
   $('btnRefreshToday').onclick = renderToday;
 
+  // 主题三档。提示文案用**后端**返回的那句（里面写了「重启后生效」），
+  // 不在这里另写一份 —— 口径只该有一处，两处迟早对不上。
+  $('themePick').onchange = async () => {
+    const r = await call('set_theme', $('themePick').value);
+    toast(r.message || '');
+    if (!r.ok) await renderSettings();   // 没存上就把下拉框拨回原来的值
+  };
+
   // 课表翻周
   $('prevWeek').onclick = () => { STATE.weekOffset--; renderWeek(); };
   $('nextWeek').onclick = () => { STATE.weekOffset++; renderWeek(); };
@@ -224,6 +232,11 @@ async function boot() {
   STATE.term = data.term;
   STATE.settings = data.settings;
   STATE.templates = null;   // 让作息页第一次打开时去后端取
+
+  // 主题的强制档，这里兜一次底：Python 那边（main.py 的 _apply_theme）也推了
+  // 一次，但它可能赶在页面加载完成之前 —— 那时 window.__applyTheme 还没定义，
+  // 会被 `&&` 静默跳过。两处推的值同源（store.theme），重复推无害。
+  if (window.__applyTheme) window.__applyTheme(data.settings.theme);
 
   $('brandSub').textContent = `第 ${data.term.todayWeek} 周`;
   updateStatusPill(data.settings);

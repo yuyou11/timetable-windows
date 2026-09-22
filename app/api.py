@@ -136,6 +136,7 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
             "enabled": self.store.enabled,
             "ballEnabled": self.store.ball_enabled,
             "remindLead": self.store.remind_lead,
+            "theme": self.store.theme,
             "hasCustomTemplates": self.store.has_custom_templates,
             "hasCustomDayTypes": self.store.has_custom_day_types,
             # 「要不要把作息配置一起导出」的判据 —— 模板**或**日型被改过都算。

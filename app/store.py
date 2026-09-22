@@ -34,6 +34,16 @@ from .format_spec import FormatError
 from .models import Block, Course, DayType
 
 
+#: 主题的三种合法取值。不在这个列表里的，一律按 `system` 处理。
+THEMES = ("system", "light", "dark")
+
+
+def _theme_or_system(value) -> str:
+    """取值校验：不认识的就退回 `system`。"""
+    text = str(value) if value is not None else ""
+    return text if text in THEMES else "system"
+
+
 def data_dir() -> Path:
     """数据目录。可以用环境变量覆盖，方便测试和绿色版"""
     override = os.environ.get("TIMETABLE_DATA_DIR")
@@ -159,6 +169,32 @@ class Store:
     @ball_enabled.setter
     def ball_enabled(self, value: bool) -> None:
         self._data["ball_enabled"] = bool(value)
+        self.save()
+
+    # ---------------- 界面主题 ----------------
+
+    @property
+    def theme(self) -> str:
+        """
+        界面主题：`system`（跟随系统）/ `light`（始终浅色）/ `dark`（始终深色）。
+
+        ## 为什么切换后要重启才生效
+
+        两个小窗口（悬浮窗、提示条）的**窗口底色**只能在创建时定，运行期
+        改不了 —— 而它会在四个圆角处露出来（理由见 `screen._bg_color`）。
+        页面颜色能立刻跟着变、窗口底色不能，两者一对不上就在圆角处
+        露出一圈反色。所以整套主题在启动时定一次，改了提示重启。
+
+        ## 为什么要校验取值
+
+        `data.json` 是用户能用记事本手改的，不能假设它写得对。
+        不认识的值一律当 `system`，不要因为一个拼错的字符串让程序起不来。
+        """
+        return _theme_or_system(self._data.get("theme"))
+
+    @theme.setter
+    def theme(self, value: str) -> None:
+        self._data["theme"] = _theme_or_system(value)
         self.save()
 
     # ---------------- 悬浮窗的位置和停靠 ----------------

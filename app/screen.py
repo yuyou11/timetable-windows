@@ -65,7 +65,23 @@ def is_dark_mode() -> bool:
         return False
 
 
-def _bg_color() -> str:
+def resolve_theme(pref: str = "system") -> str:
+    """
+    把设置里的三档解析成**实际用哪套**，返回 `"light"` 或 `"dark"`。
+
+    页面那边也用同一套解析（`<html data-theme>`），两边必须一致 ——
+    不一致就会在小窗口的四个圆角处露出反色（窗口底色和页面颜色对不上）。
+
+    传进来的值不认识就当 `"system"`：`data.json` 是用户能手改的。
+    """
+    if pref == "light":
+        return "light"
+    if pref == "dark":
+        return "dark"
+    return "dark" if is_dark_mode() else "light"
+
+
+def _bg_color(theme_pref: str = "system") -> str:
     """
     小窗口的底色，跟随系统主题。
 
@@ -85,7 +101,10 @@ def _bg_color() -> str:
     （#RRGGBB）。写 8 位带透明度的（#RRGGBBAA）会直接抛
     "is not a valid hex triplet color"，程序起不来。
     """
-    return "#181b21" if is_dark_mode() else "#ffffff"
+    # 这两个值必须和页面里 --surface 的浅色/深色值相等 ——
+    # 它们是两份独立写下的数据（一份 Python、一份 CSS），没有机制保证相等。
+    # 对不上就在窗口的四个圆角处露出一圈反色（DWM 裁圆角后露出来的就是它）。
+    return "#181b21" if resolve_theme(theme_pref) == "dark" else "#ffffff"
 
 
 def resource_path(*parts: str) -> Path:

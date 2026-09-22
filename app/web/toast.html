@@ -6,20 +6,47 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
+    /* 主题三档（设置页里选）：跟随系统 / 始终浅色 / 始终深色。
+       和 style.css 同一套约定 —— 跟随系统靠 @media，强制档靠
+       `<html data-theme="...">`。深色那套写了两遍，理由见 style.css。
+       这里用变量而不是把色值散在各选择器上：否则强制档要在四个选择器上
+       各复制一遍，漏一处就是「深色下发白的一块」。 */
+    :root {
+      --surface: #ffffff;
+      --border: #dfe3e8;
+      --text: #1a1d23;
+      --text-dim: #6b7280;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme='light']) {
+        --surface: #181b21;
+        --border: #2f3540;
+        --text: #e8eaed;
+        --text-dim: #9aa1ac;
+      }
+    }
+
+    :root[data-theme='dark'] {
+      --surface: #181b21;
+      --border: #2f3540;
+      --text: #e8eaed;
+      --text-dim: #9aa1ac;
+    }
+
     html, body {
       width: 100%;
       height: 100%;
       /* 不透明背景。原来是 transparent，靠窗口透明来"浮"在桌面上，
          但 WebView2 在部分环境下不会真正渲染透明，会露出一个突兀的方框。
-         现在改成不透明的小卡片，窗口底色和卡片一致，不依赖透明能力。 */
-      background: #ffffff;
+         现在改成不透明的小卡片，窗口底色和卡片一致，不依赖透明能力。
+
+         ⚠️ 这个 --surface 必须和 Python 侧 screen._bg_color() 返回的
+         两个色值相等 —— 对不上就在窗口的四个圆角处露出一圈反色。 */
+      background: var(--surface);
       overflow: hidden;
       font-family: "Microsoft YaHei", "PingFang SC", -apple-system, sans-serif;
       user-select: none;
-    }
-
-    @media (prefers-color-scheme: dark) {
-      html, body { background: #181b21; }
     }
 
     #card {
@@ -29,9 +56,9 @@
       gap: 11px;
       align-items: flex-start;
       padding: 14px 16px;
-      border: 1px solid #dfe3e8;
+      border: 1px solid var(--border);
       border-radius: 10px;
-      background: #ffffff;
+      background: var(--surface);
       opacity: 0;
       transition: opacity .2s ease;
     }
@@ -51,7 +78,7 @@
     #title {
       font-size: 14.5px;
       font-weight: 700;
-      color: #1a1d23;
+      color: var(--text);
       line-height: 1.35;
       word-break: break-word;
       display: -webkit-box;
@@ -63,16 +90,20 @@
     #text {
       margin-top: 3px;
       font-size: 12px;
-      color: #6b7280;
+      color: var(--text-dim);
       font-variant-numeric: tabular-nums;
     }
-
-    @media (prefers-color-scheme: dark) {
-      #card { background: #181b21; border-color: #2f3540; }
-      #title { color: #e8eaed; }
-      #text { color: #9aa1ac; }
-    }
   </style>
+  <script>
+    /* 主题的强制档。和 index.html 里那段一模一样 —— 三个窗口是三个独立页面，
+       拿不到同一份全局，只能各写一份（同 KIND_COLOR 的处理方式）。
+       跟随系统是纯 CSS（@media）就成立的，这里只管「始终浅色/深色」。 */
+    window.__applyTheme = function (t) {
+      if (t === 'light' || t === 'dark') {
+        document.documentElement.setAttribute('data-theme', t);
+      }
+    };
+  </script>
 </head>
 <body>
   <div id="card">

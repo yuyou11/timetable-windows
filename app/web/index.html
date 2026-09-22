@@ -5,6 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>时间规划表</title>
   <link rel="stylesheet" href="style.css">
+  <script>
+    /* 主题的**强制档**。跟随系统是纯 CSS（@media）就成立的；只有当用户在
+       设置里选了「始终浅色 / 始终深色」，才需要把这个决定推到 <html data-theme>
+       上（见 style.css 顶部那段说明）。
+
+       为什么写成「等着被调」而不是这里自己去读设置：读设置要跨桥调后端，
+       那是异步的，赶不上首次绘制。所以改成 Python 在窗口就绪后调一次
+       （main.py 的 _apply_theme）。
+
+       ⚠️ 代价说清楚：选了强制档的话，启动瞬间会有一次几十毫秒的换色
+       （先按系统画，再切到强制的那一档）。用「跟随系统」的人一次都不会闪 ——
+       那条路完全是 CSS，不经过这里。 */
+    window.__applyTheme = function (t) {
+      if (t === 'light' || t === 'dark') {
+        document.documentElement.setAttribute('data-theme', t);
+      }
+    };
+  </script>
 </head>
 <body>
 
@@ -208,6 +226,24 @@
         <p class="sub">学期信息、提醒、悬浮窗</p>
       </div>
     </header>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>外观</h2>
+      </div>
+      <div class="field-row">
+        <label>主题</label>
+        <select id="themePick" class="input">
+          <option value="system">跟随系统</option>
+          <option value="light">始终浅色</option>
+          <option value="dark">始终深色</option>
+        </select>
+      </div>
+      <p class="hint" id="themeHint">
+        切换后要重启程序才生效。原因是悬浮窗和提示条的窗口底色只能在启动时定，
+        中途改的话，四个圆角处会露出一圈反色的边。
+      </p>
+    </div>
 
     <div class="card">
       <div class="card-head">

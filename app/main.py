@@ -51,6 +51,7 @@ from .reminders import ReminderScheduler
 from .screen import (  # noqa: F401
     _bg_color,
     is_dark_mode,
+    resolve_theme,
     resource_path,
     screen_size,
     ui_scale,
@@ -261,7 +262,9 @@ class App:
             easy_drag=True,
             on_top=True,
             hidden=True,
-            background_color=_bg_color(),
+            # 底色跟随**设置里的主题**（不是直接跟系统）—— 和页面颜色必须同源，
+            # 否则四个圆角处会露出一圈反色。理由见 screen._bg_color。
+            background_color=_bg_color(self.store.theme),
         )
 
         # ---- 托盘图标 ----
@@ -356,7 +359,7 @@ class App:
             frameless=True,
             on_top=True,
             easy_drag=False,        # 拖动自己实现，见 ball.js（用 easy_drag 会让按钮点不动）
-            background_color=_bg_color(),
+            background_color=_bg_color(self.store.theme),
         )
         self.api._ball_window = self.ball
 
@@ -427,6 +430,11 @@ class App:
                 # 提示条离屏幕边缘有 18px / 100px 的余量，永远不会贴边，
                 # 所以它不需要 _apply_ball_geometry 那种「按位置决定」的逻辑
                 winutil.set_rounded_corners(winutil.TITLE_TOAST, True)
+
+            # 主题的强制档现在推一次；`boot()` 那边还会再推一次兜底
+            # （这里可能赶在页面加载完成之前，那一次会被 window.__applyTheme
+            # 还没定义而静默跳过 —— 所以不能只有这一处）。
+            self._apply_theme()
 
             if not ball_ready:
                 return
@@ -1129,6 +1137,40 @@ class App:
         # 悬浮窗也跳一下，让注意力落到「现在该做什么」上
         self._eval_js(self.ball, "window.pulse && window.pulse()")
 
+
+    def _apply_theme(self) -> None:
+        """
+        把设置里选的主题推给三个页面。只在「始终浅色 / 始终深色」时才推 ——
+        跟随系统是纯 CSS 就成立的，去碰它只会把简单的事情搞复杂
+        （理由见 style.css 顶部那段）。
+
+        ## 为什么是「推」，而不是页面自己去问
+
+        页面去问要跨桥调后端，那是**异步**的，赶不上首次绘制。
+        推也有代价：强制档在启动瞬间会先按系统画一次、再切过去，
+        有几十毫秒的换色。用「跟随系统」的人一次都不会闪。
+
+        ## 为什么值必须和窗口底色同源
+
+        小窗口的**窗口底色**只能在创建时定，运行期改不了 —— 而它会在四个
+        圆角处露出来（见 `screen._bg_color`）。页面颜色和它对不上，
+        就是圆角处一圈反色边。
+
+        所以两处都走 `resolve_theme(store.theme)`。⚠️ 这里改了、
+        `_bg_color` 没改（或者反过来），得到的是**只在某一个主题下看得见**
+        的 bug —— 换个主题就正常了，几乎没法自查。
+        """
+        if self.store.theme == "system":
+            return
+        theme = resolve_theme(self.store.theme)
+        for w in (self.main, self.ball, self.toast):
+            if w is None:
+                continue
+            try:
+                w.evaluate_js(f"window.__applyTheme && window.__applyTheme('{theme}')")
+            except Exception:
+                # 一个窗口失败不该连累另外两个 —— 分开 try
+                self.api.log_error(f"推主题失败：{theme}")
 
     def _show_toast(self, title: str, body: str) -> None:
         if self.toast is None:

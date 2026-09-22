@@ -11,6 +11,22 @@
    5. 过渡只用在 0.15s 的短交互上。动画长了就拖沓。
    ========================================================================== */
 
+/* ============================ 主题 ============================
+   三档：跟随系统 / 始终浅色 / 始终深色（设置页里选）。
+
+   怎么切换的：跟随系统靠 `@media (prefers-color-scheme: dark)`，
+   强制档靠 `<html data-theme="light|dark">`（启动时由 Python 推过来，
+   见 core.js 的 `__applyTheme`）。
+
+   ⚠️ 为什么**不用 JS 无条件去设 data-theme**：那样一旦 JS 没跑起来
+   （语法错、脚本 404），界面就整个没了颜色 —— 而这个项目最怕的就是
+   那种静默失效。现在这样，最常用的「跟随系统」纯 CSS 就成立，
+   JS 挂了顶多是强制档不生效、退回跟随系统。
+
+   ⚠️ 为什么深色那套要写两遍：`@media` 里的选择器没法和外面的合并成
+   一条规则。写两遍难看，但两处的值必须一模一样 —— 改一处漏一处就是
+   「强制深色和跟随系统的深色长得不一样」。 */
+
 :root {
   --bg:            #f5f6f8;
   --surface:       #ffffff;
@@ -23,16 +39,19 @@
   --accent-soft:   #eef4ff;
   --accent-text:   #1d4ed8;
   --danger:        #dc2626;
+  --shadow:        0 1px 2px rgba(16, 24, 40, .04), 0 1px 3px rgba(16, 24, 40, .06);
+}
 
+/* 和颜色无关的，只写这一处 */
+:root {
   --radius:        10px;
   --radius-lg:     14px;
-  --shadow:        0 1px 2px rgba(16, 24, 40, .04), 0 1px 3px rgba(16, 24, 40, .06);
-
   --sidebar-w:     208px;
 }
 
+/* 深色其一：跟随系统。`[data-theme='light']` 排除掉「用户强制了浅色」。 */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --bg:          #0f1115;
     --surface:     #181b21;
     --surface-2:   #1f232a;
@@ -47,6 +66,25 @@
     --shadow:      0 1px 2px rgba(0, 0, 0, .3);
   }
 }
+
+/* 深色其二：设置里选了「始终深色」。
+   多带一个属性选择器把优先级抬到 (0,2,0)，压过上面 :root 的 (0,1,0)。 */
+:root[data-theme='dark'] {
+  --bg:          #0f1115;
+  --surface:     #181b21;
+  --surface-2:   #1f232a;
+  --border:      #2a2f38;
+  --text:        #e8eaed;
+  --text-dim:    #9aa1ac;
+  --text-faint:  #6b7280;
+  --accent:      #60a5fa;
+  --accent-soft: #1a2740;
+  --accent-text: #93c5fd;
+  --danger:      #f87171;
+  --shadow:      0 1px 2px rgba(0, 0, 0, .3);
+}
+
+/* 始终浅色：把上面的媒体查询排除掉就够了，值不用再写一遍。 */
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 

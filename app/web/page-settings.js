@@ -17,6 +17,9 @@ async function renderSettings() {
 
   $('swBall').checked = t.settings.ballEnabled;
   $('leadValue').textContent = t.settings.remindLead === 0 ? '关闭' : t.settings.remindLead + ' 分钟';
+  // 主题三档。值就是存的那三个字面量（system / light / dark），
+  // 和 <select> 的 option.value 对上 —— 别在这里做映射，多一层就多一处会漂移。
+  $('themePick').value = t.settings.theme;
 
   $('termName').value = t.term.name;
   $('termStart').value = t.term.start;
