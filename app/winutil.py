@@ -129,6 +129,59 @@ def make_tool_window(title: str) -> bool:
         return False
 
 
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_NOZORDER = 0x0004
+SWP_NOACTIVATE = 0x0010
+
+WS_CAPTION = 0x00C00000       # 标题栏（WS_BORDER | WS_DLGFRAME）
+WS_THICKFRAME = 0x00040000    # 可调边框 —— DWM 的系统阴影就挂在这个样式上
+
+
+def set_window_rect(hwnd: int, x: int, y: int, w: int, h: int) -> bool:
+    """
+    **一次** `SetWindowPos` 同时改位置和尺寸。
+
+    ## 为什么必须合成一次
+
+    pywebview 的 `move()` 和 `resize()` 是两次独立的跨线程调用，中间窗口会
+    经历一个「位置和尺寸不配套」的中间态。悬浮窗贴边展开是**长大的同时朝
+    反方向挪**（贴右边 = 向左长），于是那一瞬间窗口还是一条细条、停在最终
+    位置的左端 —— 它右边到屏幕边缘那一大片是**从来没被窗口覆盖过的桌面**。
+
+    用户看到的现象：浅色模式下弹出过程有一条「黑色拖尾」（深色模式下卡片
+    和桌面都是深的，看不出来）。抓帧证实那块是 `#1b2127` —— **是桌面壁纸**，
+    不是我们任何一个变量的颜色。
+
+    合成一次之后窗口立刻占满整块矩形，露出来的就是**窗口自己的底色**
+    （浅色下是 `#ffffff`），和卡片一色，什么都看不出来。
+
+    ⚠️ 这里刻意**不带** `SWP_SHOWWINDOW`（0x40）。pywebview 的 move/resize
+    那两处是带的 —— 那会让一个已隐藏的窗口被「动一下」就重新显示出来
+    （`tests/test_ball_ui.py` 有几条护栏专门盯这个）。这里不带，等于顺手
+    消掉了那类风险。
+
+    ## 为什么收 HWND 而不是收标题
+
+    按标题找是**全机器**的（`FindWindowW`）—— 同时开两个实例时，它会返回
+    **先找到的那一个**，也就是别人的窗口。这个坑真实发生过：一个诊断脚本
+    按标题找悬浮窗，结果驱到了用户自己开着的那个 exe 上。
+
+    所以这里只认调用方**已经握在手里的 HWND**，一次查找都不做。
+    传 0（还没拿到句柄）直接返回 False，让调用方退回两次调用的做法。
+    """
+    if not hwnd:
+        return False
+    try:
+        ok = ctypes.windll.user32.SetWindowPos(
+            hwnd, 0, int(x), int(y), int(w), int(h),
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+        return bool(ok)
+    except Exception:
+        return False
+
+
 def disable_shadow(title: str) -> bool:
     """
     关掉窗口的系统阴影。
@@ -166,6 +219,19 @@ def disable_shadow(title: str) -> bool:
         result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
             hwnd, DWMWA_NCRENDERING_POLICY, ctypes.byref(value), ctypes.sizeof(value)
         )
+
+        # ⚠️ 只调上面那个**不够**：Win11 的系统阴影是挂在 `WS_THICKFRAME` /
+        # `WS_CAPTION` 这两个窗口样式上的，样式还在，阴影就还在。
+        # 用户实测反馈「阴影没消掉」，就是这一层没摘。
+        # 两者一起摘才彻底：DWM 那边关掉非客户区渲染，Win32 这边摘掉
+        # 「有边框/有标题栏」这个前提。
+        user32 = ctypes.windll.user32
+        get_long = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+        set_long = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+        GWL_STYLE = -16
+        style = get_long(hwnd, GWL_STYLE)
+        set_long(hwnd, GWL_STYLE, style & ~WS_CAPTION & ~WS_THICKFRAME)
+
         return result == 0
     except Exception:
         return False

@@ -94,7 +94,8 @@ BALL_ANIM_STEPS = 16
 
 
 def place_window(win, x: int, y: int, w: int, h: int,
-                 prev_x: int, prev_y: int, prev_w: int, prev_h: int) -> None:
+                 prev_x: int, prev_y: int, prev_w: int, prev_h: int,
+                 atomic=None) -> None:
     """
     把窗口挪到 (x, y) 并改成 w × h。**先挪还是先缩，取决于这一帧是长大还是缩小。**
 
@@ -133,6 +134,17 @@ def place_window(win, x: int, y: int, w: int, h: int,
     「pywebview 这两个调用会把窗口显示出来」那个副作用 —— 那是几条护栏的
     探针。绕过去它们就变成空断言了。等那套测试改成盯 Win32 调用，再合成不迟。
     """
+    # 首选：一次 SetWindowPos 合成到位（见 winutil.set_window_rect 的说明 ——
+    # 只有这样才能让新长出来的那块显示**窗口底色**而不是桌面）。
+    #
+    # `atomic` 由调用方注入，测试里不传 —— 那样就不会去 FindWindowW 碰真实
+    # 窗口（按标题找是全机器的，两个实例并存会串到别人的窗口上，踩过）。
+    if atomic is not None and atomic(x, y, w, h):
+        return
+
+    # 退路：拿不到 HWND 时（测试、窗口刚销毁）走两次调用。
+    # 下面这套顺序规则只是让中间态**别超出新旧矩形的并集**，
+    # 治不了「新长出来的区域本来就没被画过」那一类问题。
     resize_first_bad = (w > prev_w and x < prev_x) or (h > prev_h and y < prev_y)
     move_first_bad = (prev_w > w and x > prev_x) or (prev_h > h and y > prev_y)
 
@@ -144,6 +156,8 @@ def place_window(win, x: int, y: int, w: int, h: int,
         # 极端情况下两种都不安全（一轴长大且左移、另一轴缩小且右移）也走这条。
         win.resize(w, h)
         win.move(x, y)
+
+
 
 
 def _ease_out(t: float) -> float:
@@ -174,6 +188,10 @@ class App:
 
         self.main: Optional[webview.Window] = None
         self.ball: Optional[webview.Window] = None
+        #: 悬浮窗的窗口句柄，只在 `_polish` 里拿到过一次。
+        #: 落位用它而不是按标题找 —— 理由见 `_set_ball_rect`。
+        #: 0 = 还没拿到，那时落位会自动退回两次调用的做法。
+        self._ball_hwnd = 0
         self.toast: Optional[webview.Window] = None
         self.tray: Optional[Tray] = None
 
@@ -455,6 +473,13 @@ class App:
             #
             # 换成轮询之后就没有这个窗口期了：窗口一出现就立刻返回，
             # 慢机器上多等一会儿也不会失败。
+            # 下面两句是故意写成两句的：
+            #   第一句拿 HWND（落位要用，见 _set_ball_rect）；
+            #   第二句**那一行的写法被 tests/test_ball_ui.py 用正则钉住**
+            #   （必须长成 `ball_ready = bool(winutil.wait_for_window(`），
+            #   改成 `bool(hwnd)` 会让那条「必须轮询、不许睡固定时长」的护栏
+            #   当场变红。窗口这时一定在，第二次是即时返回，代价可以忽略。
+            self._ball_hwnd = winutil.wait_for_window(winutil.TITLE_BALL, HWND_TIMEOUT)
             ball_ready = bool(winutil.wait_for_window(winutil.TITLE_BALL, HWND_TIMEOUT))
             toast_ready = bool(winutil.wait_for_window(winutil.TITLE_TOAST, HWND_TIMEOUT))
 
@@ -612,7 +637,8 @@ class App:
         self._ensure_ball_rounded()
 
         try:
-            place_window(self.ball, x, y, w, h, prev_x, prev_y, prev_w, prev_h)
+            place_window(self.ball, x, y, w, h, prev_x, prev_y, prev_w, prev_h,
+                         atomic=self._set_ball_rect)
         except Exception as e:
             # 改窗口尺寸失败不该让程序崩 —— 顶多是这次动画没生效。
             #
@@ -657,14 +683,17 @@ class App:
         # 这两句以前分在两个地方（_polish 里关阴影、这里要圆角），
         # 各自看着都对，凑一起就没人保证顺序了 —— 收在一处。
         #
-        # 关阴影**不缓存**、每次都调：它是能被「显示窗口 / 改尺寸」这类操作
-        # 悄悄还原的那一个，而还原了也没有任何报错，只是窗口多一圈阴影。
-        # 一次 DwmSetWindowAttribute 很便宜（微秒级），换来的是不用去猜
-        # 「它是什么时候回来的」。
-        winutil.disable_shadow(winutil.TITLE_BALL)
         if self._ball_rounded:
             return
         self._ball_rounded = True
+        # 顺序不能反（理由见上），两件都要做，做完就缓存住。
+        #
+        # ⚠️ 别改成「每次都重调」。这个函数在拖动时每秒会被调几十次，
+        # 不缓存就是每秒几十次 FindWindowW + 2 次 DWM + 2 次窗口样式读写。
+        # 我试过改成不缓存（想着「阴影被还原了就再关一次」），代价立刻显形：
+        # 后台线程的 _find 调用串进了 tests/test_ball_ui.py 打的桩里，
+        # 让一条毫不相干的测试从 3 次变成 4 次。**测试串味往往是性能问题的信号**。
+        winutil.disable_shadow(winutil.TITLE_BALL)
         winutil.set_rounded_corners(winutil.TITLE_BALL, True)
 
     @staticmethod
@@ -775,7 +804,8 @@ class App:
 
                 try:
                     place_window(self.ball, x, y, w, h,
-                                 prev_x, prev_y, prev_w, prev_h)
+                                 prev_x, prev_y, prev_w, prev_h,
+                                 atomic=self._set_ball_rect)
                 except Exception:
                     # 窗口没了（正在关闭）—— 安静退出，不要把异常抛进线程
                     return
@@ -799,6 +829,19 @@ class App:
                 self._apply_ball_geometry()
 
         threading.Thread(target=_run, daemon=True, name="ball-anim").start()
+
+    def _set_ball_rect(self, x: int, y: int, w: int, h: int) -> bool:
+        """
+        悬浮窗的「一次性落位」。用**已经握在手里的 HWND**，不按标题去找。
+
+        理由见 `winutil.set_window_rect`：按标题找是全机器的，两个实例并存时
+        会把**别人的窗口**挪走（诊断脚本已经这么误伤过一次用户开着的 exe）。
+
+        `self._ball_hwnd` 只在 `_polish` 里拿到过一次。拿不到（测试、窗口刚
+        建出来）就返回 False，让 `place_window` 退回两次调用的做法 ——
+        那条路完全不碰真实窗口，所以测试跑不到 Win32 上去。
+        """
+        return winutil.set_window_rect(self._ball_hwnd, x, y, w, h)
 
     def _push_ball_layout(self) -> None:
         """告诉网页该显示「展开的卡片」还是「收起的小方框」"""

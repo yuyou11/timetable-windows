@@ -86,6 +86,31 @@ class TestPlaceWindowOrder(unittest.TestCase):
         self.assertEqual(["resize", "move"],
                          order(0, 0, 300, 50, 0, 0, 200, 100))
 
+    def test_atomic_setter_is_preferred_and_skips_both_calls(self):
+        """
+        传了 `atomic` 就该一次搞定，一次 move/resize 都不许再调。
+
+        这才是治「弹出时露出桌面」的那一刀（见 winutil.set_window_rect）——
+        下面那套顺序规则只是退路，它治不了「新长出来的区域本来就没画过」。
+        """
+        win = FakeWin()
+        calls = []
+
+        def atomic(x, y, w, h):
+            calls.append((x, y, w, h))
+            return True
+
+        place_window(win, 100, 180, 244, 104, 300, 200, 26, 76, atomic=atomic)
+        self.assertEqual([(100, 180, 244, 104)], calls)
+        self.assertEqual([], win.calls, "atomic 成功之后不该再动 move/resize")
+
+    def test_falls_back_when_atomic_reports_failure(self):
+        """atomic 拿不到 HWND 返回 False 时，退回两次调用 + 顺序规则。"""
+        win = FakeWin()
+        place_window(win, 100, 180, 244, 104, 300, 200, 26, 76,
+                     atomic=lambda *a: False)
+        self.assertEqual(["move", "resize"], win.calls)
+
     def test_growing_while_moving_left_on_another_axis_still_moves_first(self):
         """
         横向「长大 + 左移」（不安全）与纵向「缩小 + 上移」（安全）混在一起 ——
