@@ -297,6 +297,19 @@
 
 <div class="toast" id="toast"></div>
 
+<!-- 加载顺序有讲究，别随手调换：
+       · core.js 必须最先 —— app.js 顶层就调了 jslog(...)
+       · app.js 必须最后 —— 它的 boot() 可能在自己这一行就立刻执行
+         （window.pywebview 已就绪的那条路径），那时六个页面的渲染函数
+         必须已经定义好，否则 renderToday is not defined。
+       · 中间六个 page 文件彼此独立，顺序随意。 -->
+<script src="core.js"></script>
+<script src="page-today.js"></script>
+<script src="page-week.js"></script>
+<script src="page-courses.js"></script>
+<script src="page-templates.js"></script>
+<script src="page-data.js"></script>
+<script src="page-settings.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
