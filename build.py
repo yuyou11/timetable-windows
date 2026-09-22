@@ -10,7 +10,7 @@
 一开始默认是单文件，图的是"一个 exe 直接发给同学"。但日常自用它有两个代价：
 
   1. **启动慢。** 单文件版每次启动都要把整个压缩包解压到临时目录
-     （%TEMP%\_MEIxxxx），几十 MB 的东西每次开机都解一遍。
+     （%TEMP%\\_MEIxxxx），几十 MB 的东西每次开机都解一遍。
      文件夹版直接加载，没有这一步。
   2. **会同时出现两个进程。** 单文件是"引导进程 + 真正的应用进程"，
      所以任务管理器里有两个同名进程 —— 看起来像开重了，容易让人心里发毛，
@@ -24,7 +24,7 @@
 ## 打包出来是什么样
 
   · **不需要装 Python** —— Python 解释器和用到的库都在里面了
-  · 文件夹版约 40 MB（159 个文件），单文件版约 21 MB
+  · 文件夹版约 31 MB（149 个文件，已裁掉用不到的插件），单文件版约 21 MB
   · 还依赖系统的 Edge WebView2 运行时（Win10 1803+ / Win11 自带，不用管）
 
 ## 为什么要写这个脚本，而不是直接敲 pyinstaller 命令
@@ -60,6 +60,76 @@ ROOT = Path(__file__).resolve().parent
 SEP = ";"   # Windows 上 --add-data 的分隔符是分号
 
 
+# ============================================================
+#  打包后可以从 _internal 删掉的冗余（约 10.5 MB）
+# ============================================================
+#
+# 为什么在这里删，而不是让 PyInstaller 别收集：这些是 Pillow 的**可选插件**，
+# 由它的插件发现机制自动带上。`--exclude-module` 管不到它们 —— 那个参数
+# 是给 Python 模块用的，这些是 .pyd 二进制。
+#
+# 为什么确定能删：
+#
+#   · `_imagingft`（FreeType 字体渲染，2 MB）—— `PIL.ImageFont` 里那句
+#     `from . import _imagingft as core` 是包在 try/except 里的，失败只是
+#     `core = DeferredError.new(ex)`，等到真去渲染字体才炸。本程序只画圆角
+#     方块、缩放 PNG（见 app/tray.py 的 _make_icon），不碰字体。
+#
+#   · `_avif`（7.5 MB！）/ `_webp` / `_imagingcms` / `_imagingmath` / `_imagingtk`
+#     同理，都是解码特定图片格式或特定功能的插件。本程序只读 PNG 图标。
+#
+#   · `_imaging` 是核心，**绝对不能删** —— 下面 `_trim()` 会先确认它还在，
+#     不在就说明打包本身出了问题，这时候不裁剪免得把问题搅浑。
+#
+# ⚠️ 这是「排除模块排太狠」那个坑的亲戚（见 README 坑 3）：删错了同样
+# **打包全程成功、没有任何警告，运行到那一行才炸**。所以 `_trim()` 带了一道
+# 自检 —— 只要 app/ 下有任何源码提到 ImageFont，就保留 `_imagingft` 不删，
+# 这样将来真要画字的人不必记得回来改这里。
+_TRIM_PIL_PLUGINS = (
+    "_avif", "_imagingcms", "_imagingft", "_imagingmath", "_imagingtk", "_webp",
+)
+# 其它冗余：安卓产物混进了 Windows 包，以及非 x64 的 WebView2Loader
+# （安装器 timetable.iss 里已经限定了 x64，另两个架构没人用）。
+_TRIM_OTHER = (
+    "webview/lib/pywebview-android.jar",
+    "webview/lib/WebBrowserInterop.x86.dll",
+    "webview/lib/runtimes/win-arm64/native/WebView2Loader.dll",
+    "webview/lib/runtimes/win-x86/native/WebView2Loader.dll",
+)
+
+
+def _uses_image_font() -> bool:
+    """app/ 下有没有源码用到 ImageFont —— 有的话就不能剪字体插件。"""
+    return any("ImageFont" in p.read_text(encoding="utf-8", errors="ignore")
+               for p in (ROOT / "app").rglob("*.py"))
+
+
+def _trim(internal: Path) -> int:
+    """删掉 _internal 里的冗余文件，返回省下的字节数。理由见上面 _TRIM_* 的注释。"""
+    pil = internal / "PIL"
+    if not list(pil.glob("_imaging.*.pyd")):
+        print("  ⚠️ 没找到 PIL 核心 _imaging.*.pyd，跳过体积裁剪（打包可能本来就不对）")
+        return 0
+
+    keep_ft = _uses_image_font()
+    if keep_ft:
+        print("  ℹ️ app/ 下用到了 ImageFont，保留 _imagingft 不删")
+
+    freed = 0
+    for name in _TRIM_PIL_PLUGINS:
+        if name == "_imagingft" and keep_ft:
+            continue
+        for f in pil.glob(f"{name}.*"):
+            freed += f.stat().st_size
+            f.unlink()
+    for rel in _TRIM_OTHER:
+        f = internal / rel
+        if f.exists():
+            freed += f.stat().st_size
+            f.unlink()
+    return freed
+
+
 def main() -> int:
     # 默认文件夹版；要单文件就显式说 --onefile。
     #
@@ -91,6 +161,10 @@ def main() -> int:
         sys.executable, "-m", "PyInstaller",
         "--noconfirm",
         "--clean",
+        # 显式关掉 UPX。它压过的 DLL 启动时要先解压，反而更慢，还容易被杀软
+        # 误报；而且本机根本没装 UPX —— PyInstaller 默认 upx=True，找不到就
+        # 静默跳过，等于写了个永远不生效的配置。显式关掉，行为才和预期一致。
+        "--noupx",
         "--name", name,
         *(("--console",) if console else ("--windowed",)),   # --windowed 会藏掉控制台，也就藏掉了报错
         # 界面文件必须一起打包，否则打包后窗口一片空白、且没有任何报错。
@@ -155,6 +229,10 @@ def main() -> int:
         # 文件夹版要连 _internal 一起用，报文件夹总大小才有意义
         whole = sum(f.stat().st_size
                     for f in exe.parent.rglob("*") if f.is_file())
+        freed = _trim(exe.parent / "_internal")
+        if freed:
+            whole -= freed
+            print(f"体积裁剪：删掉 {freed / 1024 / 1024:.1f} MB 用不到的插件/异架构文件")
         print(f"大小：{size:.1f} MB（exe 本体）／{whole / 1024 / 1024:.1f} MB（整个文件夹）")
         print("\n⚠️ 这是文件夹版：**exe 不能单独拿出来**，")
         print("   必须和同目录的 _internal 文件夹放在一起才能运行。")
