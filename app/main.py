@@ -485,13 +485,13 @@ class App:
             # （第一版就是这么写的，白改一次。）
             bg, fg = _titlebar_colors(self.store.theme)
             main_hwnd = winutil.wait_for_window(winutil.TITLE_MAIN, HWND_TIMEOUT)
-            ok = winutil.set_titlebar_theme(
+            detail = winutil.set_titlebar_theme(
                 main_hwnd, bg, fg, resolve_theme(self.store.theme) == "dark")
             # 失败**不能**默默吞掉。这个功能坏了的表现是「就是不变、没有任何
-            # 报错」，那种问题最难查 —— 所以成败都留一行，翻日志就能知道。
+            # 报错」，那种问题最难查 —— 所以留一行，翻日志就知道走到哪一步了。
             self.api.log_error(
-                f"[标题栏] {'已设为 ' + bg if ok else '没设上（系统可能不支持）'}"
-                f"（hwnd={main_hwnd}, 主题={self.store.theme}）"
+                f"[标题栏] {detail}（hwnd={main_hwnd}, 主题={self.store.theme}, "
+                f"解析后={resolve_theme(self.store.theme)}, 目标={bg}/{fg}）"
             )
 
             # 下面两句是故意写成两句的：

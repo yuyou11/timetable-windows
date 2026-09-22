@@ -80,7 +80,7 @@ class TestWindowBackgroundMatchesSurface(unittest.TestCase):
         """
         from app.winutil import set_titlebar_theme
 
-        self.assertFalse(set_titlebar_theme(0, "#ffffff", "#1a1d23", False))
+        self.assertEqual("", set_titlebar_theme(0, "#ffffff", "#1a1d23", False))
 
     def test_every_page_can_accept_a_forced_theme(self):
         """

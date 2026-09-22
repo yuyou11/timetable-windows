@@ -254,7 +254,7 @@ def _colorref(hex_color: str) -> int:
     return r | (g << 8) | (b << 16)
 
 
-def set_titlebar_theme(hwnd: int, bg_hex: str, text_hex: str, dark: bool) -> bool:
+def set_titlebar_theme(hwnd: int, bg_hex: str, text_hex: str, dark: bool) -> str:
     """
     让**系统标题栏**跟着主题走。主窗口是唯一用得上的（另两个无边框）。
 
@@ -280,31 +280,68 @@ def set_titlebar_theme(hwnd: int, bg_hex: str, text_hex: str, dark: bool) -> boo
     `create_window()` 只是登记一下，真正的窗口要等 `webview.start()` 才出现。
     不等就调，这里拿不到句柄、**静默返回 False，表现就是「标题栏死活不变」**。
 
-    传 0 返回 False。
+    ## 返回值是一段**可读的结果**，不是布尔
+
+    这个函数踩过一次：返回 True 于是日志写「已设为 …」，可屏幕上纹丝不动。
+    原因是那次的主题恰好和系统一致（都是深色），**设置成功也看不出变化** ——
+    我把「调用成功」当成了「视觉上变了」。
+
+    所以现在把**走的是哪一层**和**从 DWM 读回来的实际值**一起返回。
+    「写进去」和「生效」是两件事，只有读回来才作数 —— `set_rounded_corners`
+    早就是这么做的，我当时没照做。
+
+    传 0 返回空串。
     """
     if not hwnd:
-        return False
+        return ""
+
+    def _read(attr) -> int:
+        got = ctypes.c_uint32(0xFFFFFFFF)
+        ctypes.windll.dwmapi.DwmGetWindowAttribute(
+            hwnd, attr, ctypes.byref(got), ctypes.sizeof(got))
+        return got.value
 
     try:
         dwm = ctypes.windll.dwmapi
 
         # 1) 精确配色。**两个都要成功才算这条路走通** —— 只换底色不换文字色，
         # 深色底配深色字就是看不见字，比不换还糟。
-        cap = ctypes.c_uint32(_colorref(bg_hex))
-        txt = ctypes.c_uint32(_colorref(text_hex))
+        want_cap = _colorref(bg_hex)
+        want_txt = _colorref(text_hex)
+        first = ""
+        cap = ctypes.c_uint32(want_cap)
+        txt = ctypes.c_uint32(want_txt)
         if (dwm.DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR,
                                       ctypes.byref(cap), ctypes.sizeof(cap)) == 0
                 and dwm.DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR,
                                               ctypes.byref(txt), ctypes.sizeof(txt)) == 0):
-            return True
+            got_cap = _read(DWMWA_CAPTION_COLOR)
+            if got_cap == want_cap:
+                return f"精确配色(生效) #{bg_hex[1:]}/{text_hex[1:]}"
+
+            # ⚠️ **返回 0 不等于生效。** 实测：Win11 22621 之前的系统上
+            # DwmSetWindowAttribute 对这两个属性照样返回 0（S_OK），但读回来
+            # 是 0xFFFFFFFF —— 那是「恢复系统默认」的哨兵值，等于什么都没写。
+            #
+            # 第一版看到返回 0 就当成成功、还提前 return 了，于是永远走不到
+            # 下面那层真正会生效的 USE_IMMERSIVE_DARK_MODE。用户看到的就是
+            # 「标题栏死活不变」。**「调用没报错」和「效果真的生效」是两件事**
+            # —— set_rounded_corners 早就有读回校验，当时没照做。
+            # 所以这里读回对不上，就老老实实往下走。
+            first = f"精确配色未生效(读回#{got_cap:06x}) → "
 
         # 2) 退路：深 / 浅二选一
         flag = ctypes.c_int(1 if dark else 0)
-        return dwm.DwmSetWindowAttribute(
-            hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
-            ctypes.byref(flag), ctypes.sizeof(flag)) == 0
-    except Exception:
-        return False
+        if dwm.DwmSetWindowAttribute(
+                hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
+                ctypes.byref(flag), ctypes.sizeof(flag)) == 0:
+            got_dark = _read(DWMWA_USE_IMMERSIVE_DARK_MODE)
+            state = "生效" if bool(got_dark) == dark else "未生效"
+            return f"{first}深浅二选一({state}) dark={dark}"
+
+        return first + "两层都不支持"
+    except Exception as e:
+        return f"抛异常：{type(e).__name__}: {e}"
 
 
 def window_rect(title: str):
