@@ -93,6 +93,59 @@ BALL_ANIM_MS = 160
 BALL_ANIM_STEPS = 16
 
 
+def place_window(win, x: int, y: int, w: int, h: int,
+                 prev_x: int, prev_y: int, prev_w: int, prev_h: int) -> None:
+    """
+    把窗口挪到 (x, y) 并改成 w × h。**先挪还是先缩，取决于这一帧是长大还是缩小。**
+
+    ## 为什么顺序要紧
+
+    `move()` 和 `resize()` 是两次独立的跨线程调用，中间窗口会经过一个
+    「位置和尺寸不配套」的中间态。这个中间态一旦**超出新旧两个矩形的并集**，
+    多出来的那块就是一片没画过的窗口区域 —— 它的颜色和卡片没关系。
+
+    深色主题下那块和卡片同色，看不出来；**浅色主题下就是卡片边上一条黑边**。
+    用户报的现象是「从收缩状态弹出的过程中有黑色拖尾，原来黑色的时候看不出来」——
+    正是这个。
+
+    判据就一句话：**挑那个中间态落在「新旧矩形的并集」里的顺序。**
+    并集里的像素是刚刚画过的，露出来也看不出来。
+
+        先 resize 再 move  出问题 ⟺ 某一轴「在长大，而位置在朝负方向挪」
+                              （中间态的右/下边缘会临时外溢）
+        先 move 再 resize  出问题 ⟺ 某一轴「在缩小，而位置在朝正方向挪」
+                              （中间态的右/下边缘会临时外溢）
+
+    对悬浮窗来说，贴边收起/展开时**各个轴是同步变大或同步变小的**，
+    于是退化成好记的两条：
+
+        长大   先 move 再 resize
+        缩小   先 resize 再 move
+
+    ⚠️ 别图省事改成固定顺序 —— 那只是把问题从一个方向挪到另一个方向：
+    展开修好了，收起又会露。也别只看「长大还是缩小」——一轴变大、
+    一轴变小时那个判断是错的，所以这里逐轴检查。
+
+    ## 为什么不用一次 SetWindowPos 把两件事合成
+
+    那确实更干净也更快，但要绕过 `win`（pywebview 的窗口对象）直接去拿 HWND。
+    而 `tests/test_ball_ui.py` 的 FakeWindow 正是靠记录 `move`/`resize` 来模拟
+    「pywebview 这两个调用会把窗口显示出来」那个副作用 —— 那是几条护栏的
+    探针。绕过去它们就变成空断言了。等那套测试改成盯 Win32 调用，再合成不迟。
+    """
+    resize_first_bad = (w > prev_w and x < prev_x) or (h > prev_h and y < prev_y)
+    move_first_bad = (prev_w > w and x > prev_x) or (prev_h > h and y > prev_y)
+
+    if resize_first_bad and not move_first_bad:
+        win.move(x, y)
+        win.resize(w, h)
+    else:
+        # 两种都安全时也走这条（和改动前的行为一致）；
+        # 极端情况下两种都不安全（一轴长大且左移、另一轴缩小且右移）也走这条。
+        win.resize(w, h)
+        win.move(x, y)
+
+
 def _ease_out(t: float) -> float:
     """
     缓动曲线：开始快、结尾慢（三次方的 ease-out）。
@@ -538,6 +591,10 @@ class App:
                 self._ball_edge, self._ball_center, area, self._ball_collapsed
             )
 
+        # 先把「改之前的尺寸」留在手里 —— place_window 要靠它判断这一帧
+        # 是长大还是缩小（顺序不同，见那边的说明）。别在它之前覆盖掉。
+        prev_x, prev_y, prev_w, prev_h = (
+            self._ball_x, self._ball_y, self._ball_w, self._ball_h)
         self._ball_w, self._ball_h = w, h
         self._ball_x, self._ball_y = x, y
 
@@ -555,8 +612,7 @@ class App:
         self._ensure_ball_rounded()
 
         try:
-            self.ball.resize(w, h)
-            self.ball.move(x, y)
+            place_window(self.ball, x, y, w, h, prev_x, prev_y, prev_w, prev_h)
         except Exception as e:
             # 改窗口尺寸失败不该让程序崩 —— 顶多是这次动画没生效。
             #
@@ -596,6 +652,16 @@ class App:
         拖动悬浮窗时这个函数每秒会被调用几十次，而值一旦设上就不会再变。
         缓存住，避免几十次多余的跨进程系统调用。
         """
+        # 关阴影和要圆角**必须成对、且顺序固定**：disable_shadow 会把圆角
+        # 一起干掉（见 winutil.disable_shadow 的说明），所以先关阴影、再要圆角。
+        # 这两句以前分在两个地方（_polish 里关阴影、这里要圆角），
+        # 各自看着都对，凑一起就没人保证顺序了 —— 收在一处。
+        #
+        # 关阴影**不缓存**、每次都调：它是能被「显示窗口 / 改尺寸」这类操作
+        # 悄悄还原的那一个，而还原了也没有任何报错，只是窗口多一圈阴影。
+        # 一次 DwmSetWindowAttribute 很便宜（微秒级），换来的是不用去猜
+        # 「它是什么时候回来的」。
+        winutil.disable_shadow(winutil.TITLE_BALL)
         if self._ball_rounded:
             return
         self._ball_rounded = True
@@ -699,13 +765,17 @@ class App:
                 except Exception:
                     return
 
+                # 和 _apply_ball_geometry 里一样：改之前的尺寸要先留下来，
+                # place_window 靠它决定先挪还是先缩。
+                prev_x, prev_y, prev_w, prev_h = (
+                    self._ball_x, self._ball_y, self._ball_w, self._ball_h)
                 self._ball_progress = progress
                 self._ball_w, self._ball_h = w, h
                 self._ball_x, self._ball_y = x, y
 
                 try:
-                    self.ball.resize(w, h)
-                    self.ball.move(x, y)
+                    place_window(self.ball, x, y, w, h,
+                                 prev_x, prev_y, prev_w, prev_h)
                 except Exception:
                     # 窗口没了（正在关闭）—— 安静退出，不要把异常抛进线程
                     return
