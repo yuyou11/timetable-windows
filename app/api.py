@@ -25,7 +25,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
-from . import engine, format_spec, slots
+from . import __version__, engine, format_spec, slots
 from .models import DAY_TYPE_LABEL, DAY_TYPE_ORDER, Course, Kind
 from .store import Store
 
@@ -108,7 +108,9 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
     def bootstrap(self) -> dict[str, Any]:
         """界面首次加载时调一次，拿全部初始数据"""
         return {
-            "version": "1.0",
+            # 版本号只在 app/__init__.py 里写一次，这里引过来 ——
+            # 再抄一份字面量的话，改版本号时就多一处会漏的地方。
+            "version": __version__,
             "isFirstLaunch": self.store.is_first_launch,
             "term": self._term_dict(),
             "settings": self._settings_dict(),

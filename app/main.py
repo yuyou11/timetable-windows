@@ -477,10 +477,21 @@ class App:
             # 标题栏跟主题走 —— 主窗口是唯一带系统标题栏的（另两个无边框）。
             # 页面换了色、标题栏没换，看着就是上下两截。
             # 这里换一次就够：主题本来就是「重启后生效」。
+            #
+            # ⚠️ **必须先等主窗口真正建出来**。`create_window()` 只是登记一下，
+            # 真正的 WinForms 窗口要等 `webview.start()` 才出现；而 `_polish`
+            # 这个线程是在 `build()` 末尾起的，那一刻一个窗口都还没有。
+            # 不等就调 → 拿不到句柄 → **静默失败，表现就是「标题栏死活不变」**。
+            # （第一版就是这么写的，白改一次。）
             bg, fg = _titlebar_colors(self.store.theme)
-            winutil.set_titlebar_theme(
-                winutil.TITLE_MAIN, bg, fg,
-                resolve_theme(self.store.theme) == "dark",
+            main_hwnd = winutil.wait_for_window(winutil.TITLE_MAIN, HWND_TIMEOUT)
+            ok = winutil.set_titlebar_theme(
+                main_hwnd, bg, fg, resolve_theme(self.store.theme) == "dark")
+            # 失败**不能**默默吞掉。这个功能坏了的表现是「就是不变、没有任何
+            # 报错」，那种问题最难查 —— 所以成败都留一行，翻日志就能知道。
+            self.api.log_error(
+                f"[标题栏] {'已设为 ' + bg if ok else '没设上（系统可能不支持）'}"
+                f"（hwnd={main_hwnd}, 主题={self.store.theme}）"
             )
 
             # 下面两句是故意写成两句的：

@@ -27,7 +27,7 @@
 ;  ============================================================================
 
 #define AppName "时间规划表"
-#define AppVersion "1.0"
+#define AppVersion "2.0"
 #define AppExeName "时间规划表.exe"
 
 ; AppId 是**这个程序的唯一身份**，升级时要保持不变。
@@ -69,7 +69,7 @@ CloseApplications=yes
 RestartApplications=no
 AllowNoIcons=yes
 ; exe 文件属性里显示的信息
-VersionInfoVersion=1.0.0.0
+VersionInfoVersion=2.0.0.0
 VersionInfoDescription={#AppName} 安装程序
 VersionInfoProductName={#AppName}
 VersionInfoProductVersion={#AppVersion}
@@ -81,6 +81,7 @@ Name: "chinese"; MessagesFile: "ChineseSimplified.isl"
 ; 下面的 %1 是"数据目录"的路径（见 [Code] 里怎么传）
 MyDataKeptLocation=你的课表和作息数据在这个文件夹里：%n%n%1%n%n卸载程序**不会**删除它 —— 以后重新安装，设置会自动回来。
 MyWebView2Missing=程序需要「Microsoft Edge WebView2 运行时」才能显示界面，%n但系统里没有检测到它。%n%nWindows 11 和较新的 Windows 10 已经自带。%n如果装好后双击没反应，请先安装 WebView2 运行时（微软官网有"常青版"免费下载），再运行本程序。%n%n现在仍然可以继续安装。
+MyDirNotWritable=装不进这个文件夹：%n%n%1%n%n当前账户没有写入权限（C:\Program Files 之类的地方就是这样）。%n%n请点「浏览…」换一个位置 —— 比如别的盘，或者自己的用户目录 —— 再继续。
 
 [Messages]
 ; 官方简体中文翻译停在 Inno 6.1.0+ 那一版，6.3 之后新增的消息它没有。
@@ -179,6 +180,43 @@ begin
     Pascal 的数组语法和 Inno 的段落语法恰好撞车，只能靠排版避开。 }
   Result := MemoDirInfo + NewLine + NewLine + MemoTasksInfo + NewLine + NewLine
     + FmtMessage(CustomMessage('MyDataKeptLocation'), [ExpandConstant('{userappdata}\Timetable')]);
+end;
+
+function DirIsWritable(const Dir: String): Boolean;
+var
+  Probe: String;
+begin
+  { 「能选目录」和「装得进去」是两件事。
+    本安装程序是 PrivilegesRequired=lowest（不弹 UAC），所以用户一旦把目录
+    选到 C:\Program Files 之类的地方，写入会在**装到一半时**才失败 ——
+    那时候界面上只剩一个进度条，报出来的错也看不出跟「选目录」有关。
+
+    所以在「选择目标位置」这一页就试着写一个文件，写不进去当场拦下来，
+    让用户还有机会点「浏览…」换个地方。
+
+    ⚠️ 只**建目录 + 试写一个文件**，写完立刻删掉，不干别的。
+    目录建出来但用户随后点了取消会留下个空目录 —— 那是无害的，
+    换来的是「选了个装不进去的路径」这件事能被当场发现。 }
+  Result := ForceDirectories(Dir);
+  if not Result then
+    exit;
+  Probe := AddBackslash(Dir) + '__timetable_write_test.tmp';
+  Result := SaveStringToFile(Probe, 'x', False);
+  if Result then
+    DeleteFile(Probe);
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  { 静默安装（/SILENT、/VERYSILENT）压根不走这一页，目录用 /DIR= 或默认值，
+    所以这里不用替它留后路 —— 默认目录在 %LOCALAPPDATA% 下，本来就能写。 }
+  if CurPageID = wpSelectDir then
+  begin
+    Result := DirIsWritable(WizardDirValue());
+    if not Result then
+      SuppressibleMsgBox(FmtMessage(CustomMessage('MyDirNotWritable'), [WizardDirValue()]), mbError, MB_OK, IDOK);
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

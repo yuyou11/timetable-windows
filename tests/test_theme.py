@@ -70,6 +70,18 @@ class TestWindowBackgroundMatchesSurface(unittest.TestCase):
         self.assertEqual(0x211b18, _colorref("#181b21"))   # r=18 g=1b b=21
         self.assertEqual(0xffffff, _colorref("#ffffff"))
 
+    def test_titlebar_needs_a_real_hwnd(self):
+        """
+        拿不到句柄就返回 False，一次 DWM 都不许碰。
+
+        ⚠️ 这条盯的是那个「静默不变」的坑：`create_window()` 只是登记，
+        真正的窗口要等 `webview.start()`。不等就调，这里拿不到句柄，
+        表现是**标题栏死活不变、而且没有任何报错**。
+        """
+        from app.winutil import set_titlebar_theme
+
+        self.assertFalse(set_titlebar_theme(0, "#ffffff", "#1a1d23", False))
+
     def test_every_page_can_accept_a_forced_theme(self):
         """
         三个窗口都得能接 Python 推过来的强制档，缺一个就是**只在那一个窗口**

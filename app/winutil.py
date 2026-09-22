@@ -254,7 +254,7 @@ def _colorref(hex_color: str) -> int:
     return r | (g << 8) | (b << 16)
 
 
-def set_titlebar_theme(title: str, bg_hex: str, text_hex: str, dark: bool) -> bool:
+def set_titlebar_theme(hwnd: int, bg_hex: str, text_hex: str, dark: bool) -> bool:
     """
     让**系统标题栏**跟着主题走。主窗口是唯一用得上的（另两个无边框）。
 
@@ -273,9 +273,15 @@ def set_titlebar_theme(title: str, bg_hex: str, text_hex: str, dark: bool) -> bo
     注意这一层调的是**加了 try 的**：DwmSetWindowAttribute 在不支持的属性上
     会返回失败码，而有些环境会直接抛。
 
-    ⚠️ 只收 HWND，不按标题去找 —— 理由见 `set_window_rect`。
+    ## ⚠️ 只收 HWND，不按标题去找
+
+    理由见 `set_window_rect`（按标题找是全机器的，会串到别人的窗口）。
+    另外**调用方必须先等窗口真正建出来**（`wait_for_window`）——
+    `create_window()` 只是登记一下，真正的窗口要等 `webview.start()` 才出现。
+    不等就调，这里拿不到句柄、**静默返回 False，表现就是「标题栏死活不变」**。
+
+    传 0 返回 False。
     """
-    hwnd = _find(title)
     if not hwnd:
         return False
 

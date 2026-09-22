@@ -7,7 +7,7 @@ python build.py                    # 先出文件夹版（约 41 MB）
 python installer\build_installer.py   # 再出安装程序（约 17 MB）
 ```
 
-产物：`dist\installer\时间规划表-安装程序-1.0.exe`
+产物：`dist\installer\时间规划表-安装程序-2.0.exe`
 
 ## 这个目录里有什么
 
@@ -86,6 +86,9 @@ winget install JRSoftware.InnoSetup
 
 - **装给当前用户**，不需要管理员权限，全程不弹 UAC
 - 默认装到 `%LOCALAPPDATA%\Programs\时间规划表`
+- **每次安装都可以自己选安装位置**（`DisableDirPage=no`，点「浏览…」换盘/换目录）
+  - 选到没权限的地方（`C:\Program Files` 之类）会**当场拦下并提示换位置**，
+    而不是装到一半才失败。见 `timetable.iss` 里的 `DirIsWritable`
 - 开始菜单快捷方式 + 可选的桌面图标
 - 「设置 → 应用」里能卸载
 - **卸载不会删课表数据**（数据在 `%APPDATA%\Timetable`，压根不在安装目录里）
@@ -94,7 +97,9 @@ winget install JRSoftware.InnoSetup
 ## 改版本号要改哪两处
 
 1. `timetable.iss` 顶部的 `#define AppVersion`
-2. `app\__init__.py` 的 `__version__`
+   （下面的 `VersionInfoVersion` 是 exe 属性里显示的四段式版本，跟着一起改）
+2. `app\__init__.py` 的 `__version__` —— 这是**唯一一处**写应用版本号的地方，
+   `app\api.py` 的 `bootstrap()` 直接引它，不用另改
 
 > ⚠️ `AppId`（那一串 GUID）**升级时绝对不要改**。
 > 改了之后新版本会被当成另一个程序装一份新的，而不是覆盖升级 ——
