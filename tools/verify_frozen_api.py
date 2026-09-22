@@ -26,6 +26,47 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT = ROOT / "dist" / "时间规划表" / "时间规划表.exe"
 
 
+def _module_names(pyz, module: str):
+    """
+    Walk a frozen module's code object and return every string constant /
+    name / local it mentions. Returns None if the module is not in the PYZ.
+
+    Walking the graph is the only way to see these: PyInstaller stores code
+    objects, not source, so there is no text to search.
+    """
+    if module not in pyz.toc:
+        return None
+
+    code = pyz.extract(module)
+    if code is None:
+        return None
+    # code may come back as a code object or as marshalled bytes
+    if isinstance(code, (bytes, bytearray)):
+        import marshal
+        code = marshal.loads(bytes(code))
+    if hasattr(code, "co_consts") and not hasattr(code, "co_names"):
+        import marshal
+        code = marshal.loads(code.co_consts[0])
+
+    seen: set[str] = set()
+
+    def walk(co):
+        if not hasattr(co, "co_consts"):
+            return
+        for const in co.co_consts:
+            if isinstance(const, str):
+                seen.add(const)
+            elif hasattr(const, "co_consts"):
+                walk(const)
+        for name in getattr(co, "co_names", ()):
+            seen.add(name)
+        for name in getattr(co, "co_varnames", ()):
+            seen.add(name)
+
+    walk(code)
+    return seen
+
+
 def main() -> int:
     exe = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT
     if not exe.exists():
@@ -79,35 +120,10 @@ def main() -> int:
         print("app.api not found in the PYZ", file=sys.stderr)
         return 2
 
-    code = pyz.extract("app.api")
-    if code is None:
+    seen = _module_names(pyz, "app.api")
+    if seen is None:
         print("could not extract app.api", file=sys.stderr)
         return 2
-    # code may come back as a code object or as marshalled bytes
-    if isinstance(code, (bytes, bytearray)):
-        import marshal
-        code = marshal.loads(bytes(code))
-    if hasattr(code, "co_consts") and not hasattr(code, "co_names"):
-        import marshal
-        code = marshal.loads(code.co_consts[0])
-
-    # Walk the code object graph collecting every string constant and name.
-    seen: set[str] = set()
-
-    def walk(co):
-        if not hasattr(co, "co_consts"):
-            return
-        for const in co.co_consts:
-            if isinstance(const, str):
-                seen.add(const)
-            elif hasattr(const, "co_consts"):
-                walk(const)
-        for name in getattr(co, "co_names", ()):
-            seen.add(name)
-        for name in getattr(co, "co_varnames", ()):
-            seen.add(name)
-
-    walk(code)
 
     control = "没有待导入的数据，请重新选择文件"
     print()
@@ -154,6 +170,43 @@ def main() -> int:
         print("      before the v3 (dayTypes) alignment.")
         return 1
 
+    # ---- 悬浮窗修复（任务栏按钮 / 外部关闭）是否也在里面 ----
+    #
+    # 同上：产物里装的是不是**这一版**代码，只有打开看才算数。
+    # 这两处修复分别住在 app.main（拦截关闭、兜底重建）和 app.winutil
+    # （等窗口出现，取代固定睡眠）。四个符号缺一不可：
+    #   wait_for_window    —— 不再睡 0.9 秒，任务栏按钮那个 bug 的修复
+    #   _on_ball_closing   —— 拦下外部关闭
+    #   _ball_alive        —— 问系统「窗口还在不在」
+    #   _ensure_ball       —— 失效就重建
+    print()
+    print("--- floating window fix (taskbar button / external close) ---")
+    main_names = _module_names(pyz, "app.main")
+    winutil_names = _module_names(pyz, "app.winutil")
+    if main_names is None or winutil_names is None:
+        print()
+        print("INCONCLUSIVE: could not read app.main / app.winutil,")
+        print("              so the floating-window fix is not verified.")
+        return 3
+
+    markers = {
+        "main._on_ball_closing": "_on_ball_closing" in main_names,
+        "main._ball_alive": "_ball_alive" in main_names,
+        "main._ensure_ball": "_ensure_ball" in main_names,
+        "winutil.wait_for_window": "wait_for_window" in winutil_names,
+    }
+    for label, present in markers.items():
+        print("  " + label.ljust(24) + ": " + str(present))
+
+    if not all(markers.values()):
+        print()
+        print("FAIL: the exe was built before the floating-window fix.")
+        print("      Symbols missing: "
+              + ", ".join(k for k, v in markers.items() if not v))
+        return 1
+
+    print()
+    print("PASS: the exe contains the floating-window fix.")
     print()
     print("PASS: the exe is the v3 build with the weekend fix.")
     return 0

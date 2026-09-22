@@ -142,9 +142,25 @@ function promptDialog(title, text) {
   });
 }
 
+/* ⚠️ 这张表 ball.js 里还有一份，**两边的值必须一模一样**。
+ *
+ * 为什么是复制而不是共享：前端没有模块系统（两个页面各自独立加载脚本），
+ * 拿不到同一个常量。那就只能复制，然后**用一条测试盯着它** ——
+ * 否则迟早漂移，而且漂移了看不出来。
+ *
+ * 实测漂移过一次：这边 CLASS 是 #3b82f6、TRANSIT 是 #cbd5e1，
+ * 悬浮窗那边是 #2563eb 和 #94a3b8 —— 同一门课在两个窗口显示两种颜色。
+ * 现在统一成**较深的那一套**。
+ *
+ * 为什么取深的那一套，而不是「主界面这一套」：悬浮窗上同一个色值既要当
+ * 7px 小圆点的背景、又要当剩余时间的**文字颜色**，而文字在白色卡片上用
+ * #cbd5e1 几乎看不见。深色在两个场景都能用，浅色只有主窗口能用 ——
+ * **消除漂移时要选那个两边都能工作的值**，而不是简单选"主要的那个"。
+ *
+ * 核对它的测试：tests/test_ball_ui.py 里那条 KIND_COLOR 一致性用例。 */
 const KIND_COLOR = {
-  SLEEP: '#78909c', MEAL: '#f59e0b', CLASS: '#3b82f6', STUDY: '#8b5cf6',
-  TRAIN: '#ef4444', FREE: '#22c55e', CHORE: '#14b8a6', TRANSIT: '#cbd5e1',
+  SLEEP: '#78909c', MEAL: '#f59e0b', CLASS: '#2563eb', STUDY: '#8b5cf6',
+  TRAIN: '#ef4444', FREE: '#22c55e', CHORE: '#14b8a6', TRANSIT: '#94a3b8',
 };
 
 const KIND_LABEL = {
@@ -879,7 +895,7 @@ function updateStatusPill(s) {
     pill.textContent = '已关闭';
     pill.className = 'pill';
   } else if (s.ballEnabled) {
-    pill.textContent = '悬浮球运行中';
+    pill.textContent = '悬浮窗运行中';
     pill.className = 'pill on';
   } else {
     pill.textContent = '提醒已开启';
@@ -955,7 +971,7 @@ function bindEvents() {
     const r = await call('set_ball_enabled', e.target.checked);
     STATE.settings = r;
     updateStatusPill(r);
-    toast(e.target.checked ? '悬浮球已开启' : '悬浮球已关闭');
+    toast(e.target.checked ? '悬浮窗已开启' : '悬浮窗已关闭');
   };
 
   document.querySelectorAll('[data-lead]').forEach((btn) => {

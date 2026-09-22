@@ -3,8 +3,8 @@
 
 用法：
     python tools/exp_windows.py main            只开主窗口
-    python tools/exp_windows.py ball            主窗口 + 悬浮球（透明）
-    python tools/exp_windows.py ball-solid      主窗口 + 悬浮球（不透明）
+    python tools/exp_windows.py ball            主窗口 + 悬浮窗（透明）
+    python tools/exp_windows.py ball-solid      主窗口 + 悬浮窗（不透明）
     python tools/exp_windows.py toast           主窗口 + 提示条
     python tools/exp_windows.py all             三个都开
 
@@ -55,7 +55,7 @@ if mode == "ball-hidden":
     # 无边框，但创建时先藏着、3 秒后再显示 ——
     # 试试能不能绕开创建时的渲染
     _ball = webview.create_window(
-        "诊断-悬浮球", str(resource_path("web", "ball.html")), js_api=api,
+        "诊断-悬浮窗", str(resource_path("web", "ball.html")), js_api=api,
         width=250, height=268,
         x=max(0, sw - 262), y=max(0, sh - 280),
         frameless=True, on_top=True, hidden=True,
@@ -66,7 +66,7 @@ if mode == "ball-hidden":
         time.sleep(3)
         try:
             _ball.show()
-            print("已 show() 悬浮球")
+            print("已 show() 悬浮窗")
         except Exception as e:                   # noqa: BLE001
             print(f"show 失败：{e}")
 
@@ -74,7 +74,7 @@ if mode == "ball-hidden":
 
 if mode in ("ball", "ball-solid", "all"):
     webview.create_window(
-        "诊断-悬浮球", str(resource_path("web", "ball.html")), js_api=api,
+        "诊断-悬浮窗", str(resource_path("web", "ball.html")), js_api=api,
         width=250, height=268,
         x=max(0, sw - 262), y=max(0, sh - 280),
         frameless=True, on_top=True,

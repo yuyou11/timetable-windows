@@ -19,6 +19,7 @@ pywebview 的 Window 对象能拿到 HWND 的路径是 `window.native.Handle`，
 from __future__ import annotations
 
 import ctypes
+import time
 
 # ---- Win32 常量 ----
 
@@ -48,6 +49,42 @@ def _find(title: str) -> int:
         return ctypes.windll.user32.FindWindowW(None, title)
     except Exception:
         return 0
+
+
+def wait_for_window(title: str, timeout: float = 10.0,
+                    interval: float = 0.02) -> int:
+    """
+    等一个窗口**真正出现**，返回它的 HWND；超时返回 0。
+
+    ## 为什么需要它
+
+    窗口是**异步创建**的：`create_window()` 只是登记一下，真正的 WinForms
+    Form 是在 `webview.start()` 的消息循环里才建出来的。所以「创建完马上按
+    标题去找」本身就是个竞态 —— 有时找得到，有时找不到。
+
+    原来的代码用 `time.sleep(0.9)` 绕开这件事。实测（见下面那段注释）
+    窗口大约 **0.80 秒**才出现，固定睡 0.9 秒的余量**只有 0.1 秒**。
+    冷启动时（WebView2 第一次初始化、杀毒软件扫一遍）轻易就超过它，
+    于是 `make_tool_window` 找不到窗口 → **静默返回 False** →
+    `WS_EX_APPWINDOW` 摘不掉 → 悬浮窗**永久地出现在任务栏上**。
+
+    这是用户实际报上来的 bug。它的恶劣之处在于**只在慢的时候发生**：
+    开发机上跑十次都是好的，用户那边偶尔中一次。
+
+    ## 换成轮询为什么就好了
+
+    轮询没有"窗口期"：窗口一出现就立刻返回（正常情况下还是 0.8 秒左右），
+    慢机器上多等一会儿也不会失败。**该等条件成立，就不要睡一个固定时长** ——
+    睡固定时长本质上是在赌「这段时间够不够」，而赌输的代价是静默失效。
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        hwnd = _find(title)
+        if hwnd:
+            return hwnd
+        if time.monotonic() >= deadline:
+            return 0
+        time.sleep(interval)
 
 
 def make_tool_window(title: str) -> bool:

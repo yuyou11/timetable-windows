@@ -19,6 +19,11 @@
 
 'use strict';
 
+/* ⚠️ 这张表 app.js 里还有一份，**两边的值必须一模一样**
+ * （tests/test_ball_ui.py 里有一条逐一比对的测试）。
+ *
+ * 曾经漂移过：这边 CLASS 是 #2563eb，那边是 #3b82f6 —— 同一门课在主窗口
+ * 和悬浮窗上显示出两种颜色，谁也没发现。取舍的详细理由见 app.js 那段。 */
 const KIND_COLOR = {
   SLEEP: '#78909c', MEAL: '#f59e0b', CLASS: '#2563eb', STUDY: '#8b5cf6',
   TRAIN: '#ef4444', FREE: '#22c55e', CHORE: '#14b8a6', TRANSIT: '#94a3b8',

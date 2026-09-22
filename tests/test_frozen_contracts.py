@@ -108,7 +108,7 @@ class TestApiExposesOnlyMethods(IsolatedApiTestCase):
     这是一条**无限的属性链**（只在无边框窗口上无限），递归深度爆掉、
     C 栈撑破，进程以 0xC0000409 硬崩，**Python 连异常都来不及记**。
 
-    而且症状极具误导性：「主窗口好好的，一加上悬浮球就崩」——
+    而且症状极具误导性：「主窗口好好的，一加上悬浮窗就崩」——
     因为普通窗口的 AccessibilityObject 链条会正常终止。
 
     ## 所以规矩是

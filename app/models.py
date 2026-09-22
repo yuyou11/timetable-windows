@@ -126,7 +126,7 @@ class Course:
 
 @dataclass
 class Moment:
-    """时间轴上的最终结果。界面和悬浮球都只认这个。"""
+    """时间轴上的最终结果。界面和悬浮窗都只认这个。"""
 
     start: int
     end: int

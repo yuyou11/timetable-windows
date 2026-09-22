@@ -158,6 +158,21 @@ class BallButtonTestCase(unittest.TestCase):
              mock.patch.object(self.main_mod, "Tray", return_value=None):
             app = self.main_mod.App()
 
+        # 让「窗口是不是真的还在」这个判断返回 True。
+        #
+        # 测试里的 app.ball 是个假窗口，代表「窗口已经存在」。而
+        # `_ball_alive()` 是去问**系统**要真实矩形的（winutil.window_rect）——
+        # 单测里根本没有真窗口，不桩的话它一定返回 None，于是
+        # `_ensure_ball()` 会判定「窗口已失效」并试图重建，把假窗口换掉，
+        # 后面所有断言就都对着一个 MagicMock 了。
+        #
+        # 需要「窗口不存在」的场景，用例里自己再套一层 patch 覆盖掉。
+        rect = mock.patch.object(
+            self.main_mod.winutil, "window_rect", lambda title: (0, 0, 244, 104)
+        )
+        rect.start()
+        self.addCleanup(rect.stop)
+
         app.ball = FakeWindow("ball")
         app.main = FakeWindow("main")
         app.toast = FakeWindow("toast")
@@ -166,6 +181,31 @@ class BallButtonTestCase(unittest.TestCase):
         app._ball_x, app._ball_y = 100, 100
         app._ball_w, app._ball_h = self.main_mod.dock.CARD_W, self.main_mod.dock.CARD_H
         return app
+
+    @staticmethod
+    def fake_create_ball(app, calls):
+        """
+        造一个假的 `_create_ball`，但它**保留真实现的第一句 guard**。
+
+        ⚠️ 为什么要复制那句 `if self.ball is not None: return`：
+
+        假函数如果不模拟它，就会比真的「乖」—— 无条件重建 —— 于是
+        「`_ensure_ball` 忘了先把失效引用清掉」这个 bug **测不出来**。
+
+        这不是假设。第一版的假函数就是直接赋值，结果
+        `tools/verify_external_close_guard.py` 的 M3 变异（把那行
+        `self.ball = None` 删掉）**改坏了代码，测试却仍然是绿的**。
+
+        和 `FakeWindow.move/resize` 模拟 `SWP_SHOWWINDOW` 是同一个道理：
+        **假对象不模拟真实副作用，测试就只是在自我确认。**
+        """
+        def create(sw, sh):
+            if app.ball is not None:
+                return
+            calls.append((sw, sh))
+            app.ball = FakeWindow("rebuilt")
+
+        return create
 
 
 class TestCloseButtonReset(BallButtonTestCase):
@@ -278,7 +318,7 @@ class TestBallStaysClosed(BallButtonTestCase):
         app = self.make_app()
         app.store._data["ball_enabled"] = True
 
-        # 悬浮球正在显示，并且是「贴右边停靠 + 卡片展开」——
+        # 悬浮窗正在显示，并且是「贴右边停靠 + 卡片展开」——
         # 用户能点到「关闭」按钮，就说明当时卡片是展开的
         app.ball.show()
         app._ball_edge = "right"
@@ -296,7 +336,7 @@ class TestBallStaysClosed(BallButtonTestCase):
         self.assertFalse(
             app.ball.visible,
             "悬浮窗被「关闭」之后又自己显示出来了 —— "
-            "几何更新必须避开已关闭的悬浮球（pywebview 的 move/resize 会显示窗口）",
+            "几何更新必须避开已关闭的悬浮窗（pywebview 的 move/resize 会显示窗口）",
         )
 
     def test_drag_end_does_not_revive_the_ball_either(self):
@@ -309,13 +349,13 @@ class TestBallStaysClosed(BallButtonTestCase):
 
         app._ball_drag_end()
 
-        self.assertFalse(app.ball.visible, "已关闭的悬浮球不该被拖动路径重新显示")
+        self.assertFalse(app.ball.visible, "已关闭的悬浮窗不该被拖动路径重新显示")
 
     def test_hover_does_not_touch_state_while_closed(self):
         """关掉之后，鼠标进出也不该改动停靠状态。
 
         只挡几何不挡状态的话，`_ball_collapsed` 会偷偷翻成 True 而尺寸没变 ——
-        等用户在设置里重新打开悬浮球，就会看到一个 244×104 的窗口里
+        等用户在设置里重新打开悬浮窗，就会看到一个 244×104 的窗口里
         画着那张「收起的小方框」，状态和实际尺寸对不上。
         """
         app = self.make_app()
@@ -334,13 +374,13 @@ class TestBallStaysClosed(BallButtonTestCase):
         app._ball_hover(False)
         self.assertFalse(
             app._ball_collapsed,
-            "鼠标离开时，已关闭的悬浮球不该被改成「收起」状态",
+            "鼠标离开时，已关闭的悬浮窗不该被改成「收起」状态",
         )
 
         app._ball_hover(True)
         self.assertFalse(
             app._ball_collapsed,
-            "鼠标进入时，已关闭的悬浮球也不该被改动收起状态",
+            "鼠标进入时，已关闭的悬浮窗也不该被改动收起状态",
         )
 
 
@@ -362,7 +402,7 @@ class TestSuppressExpand(BallButtonTestCase):
     """
 
     def make_docked_app(self):
-        """造一个「贴边停靠 + 已收起」的 App —— 就是启动时悬浮球的样子"""
+        """造一个「贴边停靠 + 已收起」的 App —— 就是启动时悬浮窗的样子"""
         app = self.make_app()
         app.store._data["ball_enabled"] = True
         app.ball.show()
@@ -800,11 +840,11 @@ class TestAnimationDriver(BallButtonTestCase):
 
     def test_closed_ball_is_never_animated(self):
         """
-        悬浮球关着的时候，动画一步都不能走。
+        悬浮窗关着的时候，动画一步都不能走。
 
         这条是第一个 bug 的回归护栏：pywebview 的 resize()/move()
         **会把窗口显示出来**，所以一个还在跑的动画线程足以把刚隐藏的
-        悬浮球又弄回来。
+        悬浮窗又弄回来。
         """
         app = self.make_docked_app(collapsed=False)
         app.store._data["ball_enabled"] = False
@@ -814,7 +854,272 @@ class TestAnimationDriver(BallButtonTestCase):
         time.sleep(0.25)          # 足够动画跑完前几帧
 
         self.assertFalse(app.ball.visible,
-                         "悬浮球已关闭，动画却把窗口又显示出来了")
+                         "悬浮窗已关闭，动画却把窗口又显示出来了")
+
+
+# ============================================================
+#  悬浮窗出现在任务栏上 / 关掉之后再也唤不回来
+# ============================================================
+
+class TestWaitForWindow(unittest.TestCase):
+    """
+    等窗口出现，而不是睡一个固定时长。
+
+    这是「悬浮窗出现在任务栏上」那个 bug 的修复本身。
+    """
+
+    def test_returns_as_soon_as_the_window_appears(self):
+        """窗口一出现就返回，不用等满超时"""
+        from app import winutil
+        state = {"calls": 0}
+
+        def fake_find(title):
+            state["calls"] += 1
+            return 12345 if state["calls"] >= 3 else 0
+
+        with mock.patch.object(winutil, "_find", fake_find):
+            hwnd = winutil.wait_for_window("随便什么标题", timeout=5.0,
+                                           interval=0.001)
+
+        self.assertEqual(12345, hwnd)
+        self.assertEqual(3, state["calls"], "应该一找到就收手")
+
+    def test_returns_zero_after_timeout(self):
+        """一直找不到就等到超时再返回 0 —— 让调用方有机会把它报出来"""
+        from app import winutil
+        with mock.patch.object(winutil, "_find", lambda title: 0):
+            start = time.monotonic()
+            hwnd = winutil.wait_for_window("找不到的窗口", timeout=0.05,
+                                           interval=0.01)
+            elapsed = time.monotonic() - start
+
+        self.assertEqual(0, hwnd)
+        self.assertGreaterEqual(elapsed, 0.05, "超时之前不该提前返回")
+
+
+class TestBallExternalClose(BallButtonTestCase):
+    """
+    悬浮窗被「外部」要求关闭时会发生什么（任务栏右键 → 关闭、Alt+F4）。
+
+    ## 这个 bug 的两半
+
+    **第一半：任务栏上本来不该有按钮。**
+    窗口天生带着 WS_EX_APPWINDOW（实测 EX=0x00050008），要靠
+    `make_tool_window` 把它摘掉。而那个调用原来排在「睡 0.9 秒之后」，
+    窗口约 **0.80 秒**才出现 —— 余量只有 0.1 秒，冷启动时抢不过就
+    **静默失败**，于是那个按钮永久留在任务栏上。
+    修法是换成 `wait_for_window` 轮询（见 TestWaitForWindow）。
+
+    **第二半：窗口一旦被销毁，就再也唤不回来。**
+    因为悬浮窗窗口没有订阅 `closing` —— pywebview 的 `Event.set()` 在
+    没有订阅者时返回 False，于是 `args.Cancel` 保持 False，**窗口被真的
+    关掉了**。而 `App.ball` 这个引用还指着已销毁的窗口（**不是 None**），
+    所以「`ball is None` 才重建」那条路永远走不到；每个入口都去调
+    `show()`，在已 Dispose 的 Form 上抛异常，又被 `except: pass` 吞掉。
+    用户看到的就是「点了没反应」，重启前无解。
+    """
+
+    def test_external_close_is_cancelled_and_becomes_hide(self):
+        """
+        外部关闭要被拦下来，并按程序的设计当成「关闭」（= 隐藏 + 关设置）。
+
+        返回值的含义在 pywebview 里很容易看反：
+
+            True  → 允许关闭
+            False → 取消关闭
+        """
+        app = self.make_app()
+        app.store._data["ball_enabled"] = True
+
+        allowed = app._on_ball_closing()
+
+        self.assertFalse(allowed,
+                         "外部关闭应该被取消 —— 按设计只该隐藏，窗口要留着")
+        self.assertTrue(app.ball.hidden, "应该把窗口藏起来")
+        self.assertFalse(app.store.ball_enabled,
+                         "「关闭」的语义是连设置一起关掉，否则重启它又冒出来了")
+
+    def test_shutdown_is_still_allowed_to_close_it(self):
+        """
+        ⚠️ 退出流程必须放行 —— 否则程序永远退不掉。
+
+        pywebview 的 `destroy_window()` 实现就是 `i.Close()`，**会再触发
+        一次 FormClosing**。这里要是也无条件取消，`_shutdown()` 就收不了尾。
+        """
+        app = self.make_app()
+        app.store._data["ball_enabled"] = True
+        app._shutting_down = True
+
+        self.assertTrue(app._on_ball_closing(),
+                        "正在退出时必须允许关闭，否则 destroy() 会被自己拦下")
+
+    def test_create_ball_subscribes_to_closing(self):
+        """
+        反向护栏：`_create_ball` 里必须订阅 closing。
+
+        用锚定正则而不是子串 —— 子串会被 `events.closing_foo` 这类改写
+        蒙混过关（项目里踩过：`assertIn("window.ballAnim", js)` 被
+        `window.ballAnimRenamed` 骗过去了）。
+        """
+        src = Path(self.main_mod.__file__).read_text(encoding="utf-8")
+        self.assertRegex(
+            src,
+            r"self\.ball\.events\.closing \+= self\._on_ball_closing",
+            "悬浮窗没有订阅 closing —— 外部（任务栏/Alt+F4）能把它真的销毁掉",
+        )
+
+    def test_polish_waits_for_the_window_instead_of_sleeping(self):
+        """
+        反向护栏：`_polish` 里**不能**再出现「睡一个固定时长再去找窗口」。
+
+        那正是任务栏按钮这个 bug 的根因：睡 0.9 秒，而窗口约 0.80 秒才
+        出现 —— 余量只有 0.1 秒。冷启动时抢不过，按标题找窗口返回 0，
+        `make_tool_window` 静默失败，WS_EX_APPWINDOW 就摘不掉了。
+
+        钉住它，是因为「睡一会儿再试」这个写法**看起来特别合理**，
+        很容易被下一个人顺手加回来。而它失败的时候**不报错**，
+        只在用户的机器上偶尔发作 —— 开发机上几乎测不出来。
+        """
+        src = Path(self.main_mod.__file__).read_text(encoding="utf-8")
+        start = src.index("def _polish(")
+        end = src.index("def _apply_ball_geometry(")
+        body = src[start:end]
+
+        # ⚠️ 必须用**行锚定**的正则，不能写成 assertNotIn("time.sleep(0.9)")。
+        #
+        # 这条测试的第一版就是 assertNotIn，结果**在 baseline 上直接变红** ——
+        # 因为上面那段注释里提到了「原来是 time.sleep(0.9) 硬等」，
+        # 子串断言分不清「注释里提到」和「真的在调」。
+        #
+        # 这和 `window.ballAnimRenamed` 蒙混过 `assertIn("window.ballAnim")`
+        # 是同一个坑：**「存在/不存在」型的子串断言，描述不了
+        # 「它到底是不是一句可执行的语句」** —— 有 tests/test_ball_ui.py 里
+        # 那条已经有言在先的教训，这里又栽了一次。
+        self.assertNotRegex(
+            body, r"(?m)^\s*time\.sleep\(0\.9\)\s*$",
+            "_polish 又改回「睡固定时长」了 —— 窗口出现得比它晚时会静默失败",
+        )
+        self.assertRegex(
+            body, r"(?m)^\s*ball_ready = bool\(winutil\.wait_for_window\(",
+            "_polish 应该用 wait_for_window 等窗口真的出现，而不是睡一会儿再试",
+        )
+
+    def test_alive_asks_the_system_not_our_own_memory(self):
+        """窗口在不在，要问系统，不能只看 self.ball is not None"""
+        app = self.make_app()
+
+        with mock.patch.object(self.main_mod.winutil, "window_rect",
+                               return_value=None):
+            self.assertFalse(app._ball_alive(),
+                             "系统里找不到窗口时，就该认为它已经没了")
+
+        with mock.patch.object(self.main_mod.winutil, "window_rect",
+                               return_value=(0, 0, 244, 104)):
+            self.assertTrue(app._ball_alive())
+
+    def test_ensure_does_not_rebuild_while_the_window_is_alive(self):
+        """窗口还在就不要重建 —— 重建会丢掉它的位置和停靠状态"""
+        app = self.make_app()
+        built = []
+        app._create_ball = self.fake_create_ball(app, built)
+
+        self.assertTrue(app._ensure_ball())
+        self.assertEqual([], built, "窗口还在的时候不该重建")
+        self.assertEqual("ball", app.ball.name, "原来的窗口对象要保持不变")
+
+    def test_ensure_rebuilds_when_the_window_was_destroyed(self):
+        """窗口没了要能重建，而不是对着一个死引用反复调 show()"""
+        app = self.make_app()
+        built = []
+        app._create_ball = self.fake_create_ball(app, built)
+
+        with mock.patch.object(self.main_mod.winutil, "window_rect",
+                               return_value=None):
+            ok = app._ensure_ball()
+
+        self.assertTrue(ok)
+        self.assertEqual(1, len(built), "窗口失效时必须重建一次")
+        self.assertEqual("rebuilt", app.ball.name)
+
+    def test_toggle_recovers_a_destroyed_window(self):
+        """
+        用户报的核心场景：窗口被外部销毁之后，还能不能重新叫回来。
+
+        修复前：`self.ball` 不是 None → 不重建 → `self.ball.show()`
+        抛异常 → 被 `except: pass` 吞掉 → 点了没反应，重启前无解。
+        """
+        app = self.make_app()
+        app.store._data["ball_enabled"] = False    # 先关着，toggle 会打开它
+
+        rebuilt = []
+        app._create_ball = self.fake_create_ball(app, rebuilt)
+
+        with mock.patch.object(self.main_mod.winutil, "window_rect",
+                               return_value=None):   # 系统里已经没有这个窗口了
+            app._toggle_ball()
+
+        self.assertEqual(1, len(rebuilt),
+                         "窗口已销毁时，切换开关应该把它重建出来")
+        self.assertTrue(app.store.ball_enabled)
+        self.assertTrue(app.ball.shown, "重建之后要真的显示出来")
+
+    def test_settings_change_recovers_a_destroyed_window(self):
+        """同一件事的另一条入口：设置页里打开悬浮窗"""
+        app = self.make_app()
+        app.store._data["ball_enabled"] = True
+
+        rebuilt = []
+        app._create_ball = self.fake_create_ball(app, rebuilt)
+
+        with mock.patch.object(self.main_mod.winutil, "window_rect",
+                               return_value=None):
+            app._on_settings_changed()
+
+        self.assertEqual(1, len(rebuilt), "设置里打开悬浮窗时也该把它重建出来")
+        self.assertTrue(app.ball.shown)
+
+
+class TestKindColorMatchesAcrossPages(unittest.TestCase):
+    """
+    KIND_COLOR 在主窗口和悬浮窗里各写了一份，值必须一模一样。
+
+    ## 为什么要有这条测试
+
+    前端没有模块系统（两个页面各自独立加载脚本），拿不到同一个常量 ——
+    只能复制。而**复制的东西迟早漂移**，漂移了还看不出来：实测就漂过一次
+    （CLASS 一边 #3b82f6、一边 #2563eb），于是同一门课在主窗口和悬浮窗上
+    显示成两种颜色，一直没人发现。
+
+    这条照着 `test_dock.py` 里核对圆角半径那条写：
+    **两份独立写下的数据，就得配一条读文件逐项比对的测试接着。**
+    """
+
+    WEB = Path(__file__).resolve().parent.parent / "app" / "web"
+    BLOCK_RE = re.compile(r"const KIND_COLOR = \{(.*?)\};", re.DOTALL)
+    PAIR_RE = re.compile(r"([A-Z_]+):\s*'(#[0-9a-fA-F]{6})'")
+
+    def _colors(self, filename: str) -> dict:
+        text = (self.WEB / filename).read_text(encoding="utf-8")
+        m = self.BLOCK_RE.search(text)
+        self.assertIsNotNone(m, f"{filename} 里找不到 KIND_COLOR 定义")
+        colors = dict(self.PAIR_RE.findall(m.group(1)))
+        self.assertEqual(8, len(colors),
+                         f"{filename} 的 KIND_COLOR 应该有 8 项，实际 {len(colors)} 项")
+        return colors
+
+    def test_app_js_and_ball_js_agree(self):
+        app_colors = self._colors("app.js")
+        ball_colors = self._colors("ball.js")
+        self.assertEqual(
+            app_colors, ball_colors,
+            "app.js 和 ball.js 的 KIND_COLOR 漂移了 —— 同一个 kind 会在"
+            "主窗口和悬浮窗上显示成两种颜色。改一边必须同步改另一边。",
+        )
+
+    def test_covers_every_kind(self):
+        """8 种 kind 一个都不能漏 —— 漏了前端会 fallback 成灰色，很难发现"""
+        from app.models import Kind
+        self.assertEqual({k.value for k in Kind}, set(self._colors("app.js")))
 
 
 if __name__ == "__main__":

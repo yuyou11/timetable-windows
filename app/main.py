@@ -4,7 +4,7 @@
 ## 三个窗口
 
     main    主窗口，带系统标题栏。三个页面都在这里。
-    ball    悬浮球。无边框、置顶、透明、不占任务栏。
+    ball    悬浮窗。无边框、置顶、透明、不占任务栏。
     toast   课前提醒用的小提示条。启动时就创建好、平时藏起来。
 
     为什么 toast 要提前创建，而不是到点再建？
@@ -62,9 +62,13 @@ APP_TITLE = "时间规划表"
 BALL_W, BALL_H = 244, 104       # 悬浮窗（常驻小卡片，不是圆球）
 TOAST_W, TOAST_H = 330, 108
 
+#: 等窗口真正出现的上限（秒）。见 `winutil.wait_for_window` 的说明 ——
+#: 它取代了原来 `_polish` 里那句「睡 0.9 秒」，因为那句的余量只有 0.1 秒。
+HWND_TIMEOUT = 10.0
+
 
 # ============================================================
-#  悬浮球收起/展开动画
+#  悬浮窗收起/展开动画
 # ============================================================
 
 #: 一次收起（或展开）的总时长（毫秒）
@@ -452,6 +456,11 @@ class App:
         # 创建窗口时页面还没加载，那时候 evaluate_js 会石沉大海。
         self.ball.events.loaded += self._push_ball_layout
 
+        # ⚠️ 必须订阅 closing，否则**外部**（任务栏右键 → 关闭、Alt+F4）
+        # 能把这个窗口真的销毁掉，之后再也唤不回来。
+        # 详见 _on_ball_closing 的说明。
+        self.ball.events.closing += self._on_ball_closing
+
         # ---- 窗口的「外观整形」----
         #
         # 这几步必须等窗口真正创建出来（HWND 存在）之后才能做，
@@ -471,16 +480,48 @@ class App:
         # 再定一次悬浮窗的圆角，那才是最终该生效的那个值。
         # （第一版把几何放在最前面，圆角刚设好就被覆盖，白改。）
         def _polish() -> None:
-            time.sleep(0.9)
+            # ⚠️ 这里原来是 `time.sleep(0.9)` 硬等。
+            #
+            # 实测（见 tools/exp_toolwin.py）：窗口大约 **0.80 秒**才出现，
+            # 固定睡 0.9 秒的余量**只有 0.1 秒**。冷启动时（WebView2 首次
+            # 初始化、杀毒软件扫一遍）轻易就会超过它，于是按标题找窗口失败。
+            #
+            # 而失败是**静默**的：WS_EX_APPWINDOW 摘不掉，
+            # **悬浮窗从此永久地留在任务栏上**（用户报的就是这个）。
+            #
+            # 换成轮询之后就没有这个窗口期了：窗口一出现就立刻返回，
+            # 慢机器上多等一会儿也不会失败。
+            ball_ready = bool(winutil.wait_for_window(winutil.TITLE_BALL, HWND_TIMEOUT))
+            toast_ready = bool(winutil.wait_for_window(winutil.TITLE_TOAST, HWND_TIMEOUT))
 
-            winutil.make_tool_window(winutil.TITLE_BALL)
-            winutil.disable_shadow(winutil.TITLE_BALL)
+            # 失败必须留下痕迹。原来是「找不到就当没这回事」，于是任务栏上
+            # 多出来的按钮查无实据 —— 和 README 第 4.9 条（_apply_ball_geometry
+            # 里那个 except: pass）是同一类错误：
+            # **静默失败和直接崩掉一样难查，区别只是它不留下崩溃报告。**
+            if not ball_ready:
+                self.api.log_error(
+                    f"等悬浮窗 HWND 超时（{HWND_TIMEOUT:.0f} 秒）："
+                    f"WS_EX_TOOLWINDOW 没设上，它可能会出现在任务栏里"
+                )
+            if not toast_ready:
+                self.api.log_error(
+                    f"等提示条 HWND 超时（{HWND_TIMEOUT:.0f} 秒）：窗口样式没设上"
+                )
 
-            winutil.make_tool_window(winutil.TITLE_TOAST)
-            winutil.disable_shadow(winutil.TITLE_TOAST)
-            # 提示条离屏幕边缘有 18px / 100px 的余量，永远不会贴边，
-            # 所以它不需要 _apply_ball_geometry 那种「按位置决定」的逻辑
-            winutil.set_rounded_corners(winutil.TITLE_TOAST, True)
+            # ⚠️ 顺序有讲究，不要随手调换（见上面那段顺序说明）。
+            if ball_ready:
+                winutil.make_tool_window(winutil.TITLE_BALL)
+                winutil.disable_shadow(winutil.TITLE_BALL)
+
+            if toast_ready:
+                winutil.make_tool_window(winutil.TITLE_TOAST)
+                winutil.disable_shadow(winutil.TITLE_TOAST)
+                # 提示条离屏幕边缘有 18px / 100px 的余量，永远不会贴边，
+                # 所以它不需要 _apply_ball_geometry 那种「按位置决定」的逻辑
+                winutil.set_rounded_corners(winutil.TITLE_TOAST, True)
+
+            if not ball_ready:
+                return
 
             # 强制重设一次 —— 上面的 disable_shadow 已经把圆角干掉了，
             # 把缓存清掉可以让 _ensure_ball_rounded 重新设一遍
@@ -526,7 +567,7 @@ class App:
         """
         把当前状态（停靠方向、收起与否）真正作用到窗口上。
 
-        [animate] True 时，若悬浮球正贴边停靠，则**逐步**过渡到目标形态
+        [animate] True 时，若悬浮窗正贴边停靠，则**逐步**过渡到目标形态
         （见 `_animate_ball`）；否则立刻落位。默认不动画，保持原来的行为。
 
         为什么默认 False 而不是 True：这个方法有 6 个调用点，
@@ -537,7 +578,7 @@ class App:
         if self.ball is None:
             return
 
-        # ⚠️ 悬浮球在设置里是关闭的 → 一律不许动它的几何。
+        # ⚠️ 悬浮窗在设置里是关闭的 → 一律不许动它的几何。
         #
         # 为什么这条不能省：**pywebview 的 move() 和 resize() 会把窗口显示出来。**
         # 它们内部走的是 SetWindowPos，而传进去的 flag 里有 SWP_SHOWWINDOW
@@ -554,7 +595,7 @@ class App:
         # （见 ball.js 的 scheduleCollapse 和下面 _ball_hover 的 else 分支）。
         #
         # 修在这里而不是修在那一个调用点上：这是一次性的收口，
-        # 任何路径想让已关闭的悬浮球「动一下」，都会在这里被挡住。
+        # 任何路径想让已关闭的悬浮窗「动一下」，都会在这里被挡住。
         if not self.store.ball_enabled:
             return
 
@@ -690,7 +731,7 @@ class App:
            前者防两个动画同时改窗口；后者是踩过的坑 ——
            pywebview 的 `resize()`/`move()` 会把窗口显示出来（详见
            `_apply_ball_geometry` 里的注释），所以一个还在跑的动画线程
-           足以把**刚被隐藏的悬浮球又弄回来**。
+           足以把**刚被隐藏的悬浮窗又弄回来**。
 
         2. **最后一帧要用精确值收口**，而不是"循环跑完就完事"。
            逐帧插值会累积浮点误差，收口时调用一次即时路径，
@@ -799,6 +840,103 @@ class App:
             return
         self._eval_js(self.ball, "window.ballShown && window.ballShown()")
 
+    def _on_ball_closing(self) -> bool:
+        """
+        有人想关掉悬浮窗窗口（任务栏右键 → 关闭、Alt+F4……）。
+
+        ## 返回值的含义（pywebview 这里很容易看反）
+
+            True  → 允许关闭
+            False → **取消**关闭
+
+        内部实现是 `should_cancel = closing.set()`，而 `Event.set()` 在
+        **没有订阅者**的时候返回 False —— 也就是说，**没订阅 closing 的
+        窗口会被直接关掉**。悬浮窗原来就没订阅，所以在任务栏上不小心点了
+        关闭，是真能把它销毁的。
+
+        ## 为什么必须拦下来
+
+        程序的设计是「关闭 = 隐藏」（见 `api.hide_ball`）。而窗口一旦被真的
+        销毁，`App.ball` 这个引用还指着它（**不是 None**），会连锁出三件事：
+
+          · `_toggle_ball` / `_on_settings_changed` 都只在 `ball is None` 时重建
+          · 于是每个「打开悬浮窗」的入口都去调 `self.ball.show()`
+          · 在已销毁的 Form 上调用会抛异常，而调用点全是 `except: pass`
+
+        结果就是**重启之前无论如何都唤不回来** —— 用户报的第二个现象。
+
+        ## 为什么交给 hide_ball，而不是在这里自己写一遍
+
+        外部关闭和点悬浮窗上那个「关闭」按钮，**语义上是同一件事**，
+        所以直接复用那条已经测过的路径（关设置 + 隐藏 + 刷新各处开关）。
+        另写一段「差不多的」逻辑，只会多一处需要同步维护的地方。
+
+        ## ⚠️ 退出流程必须放行
+
+        `_shutdown()` 靠 `w.destroy()` 收场，而 pywebview 的
+        `destroy_window()` 实现就是 `i.Close()` —— **会再触发一次
+        FormClosing**。这里要是无条件取消，程序就**永远退不掉**了。
+
+        所以和 `_on_main_closing` 一样，认 `_shutting_down` 这个标志放行。
+        """
+        if self._shutting_down:
+            return True
+
+        try:
+            self.api.hide_ball()
+        except Exception as e:
+            self.api.log_error(f"拦截悬浮窗关闭时出错：{type(e).__name__}: {e}")
+
+        # 取消这次关闭：按设计它只该「隐藏」，窗口本身要留着。
+        return False
+
+    def _ball_alive(self) -> bool:
+        """
+        悬浮窗窗口是不是**真的还在**。
+
+        不能只看 `self.ball is not None` —— 窗口可能已经被外部销毁
+        （任务栏关闭、Alt+F4、系统强制回收），而 Python 这边的引用还指着它。
+
+        所以去问系统：按标题还能不能找到这个窗口。
+        **拿窗口的真实状态，而不是我们记忆里的状态** —— 这也正是
+        `winutil.window_rect` 存在的意义（那份记忆值不可靠，
+        见它和 `_apply_ball_geometry` 里的说明）。
+        """
+        if self.ball is None:
+            return False
+        try:
+            return winutil.window_rect(winutil.TITLE_BALL) is not None
+        except Exception:
+            return False
+
+    def _ensure_ball(self) -> bool:
+        """
+        确保有一个**可用的**悬浮窗窗口，必要时重建它。
+
+        这是「无论如何都唤不回来」的兜底：即使窗口被某种没拦住的方式
+        （异常、系统强制销毁、竞态）干掉了，下次要显示时也能重新建出来，
+        而不是对着一个死引用反复调 `show()` 然后静默失败。
+
+        ⚠️ 重建前必须把 `self.ball` 置成 None：`_create_ball` 第一句就是
+        `if self.ball is not None: return`，不清掉的话它会直接返回，
+        等于什么都没重建 —— 而且**不报错**。
+        """
+        if self._ball_alive():
+            return True
+
+        if self.ball is not None:
+            self.api.log_error("悬浮窗窗口已失效（被外部关掉了？），重新创建")
+
+        self.ball = None
+        try:
+            sw, sh = screen_size()
+            self._create_ball(sw, sh)
+        except Exception as e:
+            self.api.log_error(f"重建悬浮窗失败：{type(e).__name__}: {e}")
+            return False
+
+        return self.ball is not None
+
     def _ball_drag_end(self) -> dict:
         """
         用户把悬浮窗拖完松手了。
@@ -851,12 +989,12 @@ class App:
         if self.ball is None or self._ball_edge is None:
             return {"ok": True}
 
-        # 悬浮球已经关掉了 → 鼠标进出跟它没关系，连收起状态都不要改。
+        # 悬浮窗已经关掉了 → 鼠标进出跟它没关系，连收起状态都不要改。
         #
         # 为什么连状态也要一起挡住：窗口刚被藏起来的那一刻，光标正好在它上面，
         # 于是 WebView2 会补发一次 mouseleave，前端 380ms 后回调到这里。
         # 如果只挡 _apply_ball_geometry 不挡这里，`_ball_collapsed` 会偷偷翻成
-        # True 而几何没跟着变 —— 等用户在设置里把悬浮球重新打开，
+        # True 而几何没跟着变 —— 等用户在设置里把悬浮窗重新打开，
         # 就会看到一个 244×104 的窗口里画着那张「收起的小方框」，
         # 状态和实际尺寸对不上。
         #
@@ -892,22 +1030,21 @@ class App:
         """
         托盘菜单里的「显示悬浮窗」开关。
 
-        注意这里同时处理三种情况：
+        注意这里同时处理四种情况：
           · 悬浮窗关着（配置层面）→ 打开并创建它
           · 悬浮窗开着但窗口还没建出来 → 建出来
+          · 悬浮窗开着、但窗口**已经被销毁**（被外部关过）→ 重建
           · 悬浮窗开着且已存在 → 切换显示/隐藏
         """
         want = not self.store.ball_enabled
         self.store.ball_enabled = want
 
         if want:
-            if self.ball is None:
-                sw, sh = screen_size()
-                try:
-                    self._create_ball(sw, sh)
-                except Exception as e:
-                    self.api.log_error(f"创建悬浮窗失败：{type(e).__name__}: {e}")
-                    return
+            # 交给 _ensure_ball：它会把「窗口已失效」这种情况一起处理掉。
+            # 直接对着一个失效的引用调 show() 会抛异常，而下面那个 try
+            # 会把它吞干净 —— 表现就是「点了没反应」（用户报过这个）。
+            if not self._ensure_ball():
+                return
             try:
                 self.ball.show()
                 self._ball_suppress_expand = False
@@ -1033,12 +1170,12 @@ class App:
         self.main.on_top = False
 
     def _on_settings_changed(self) -> None:
-        """设置变了 → 同步悬浮球的显示状态 + 让提醒线程重算"""
+        """设置变了 → 同步悬浮窗的显示状态 + 让提醒线程重算"""
         want_ball = self.store.ball_enabled
         try:
-            if want_ball and self.ball is None:
-                sw, sh = screen_size()
-                self._create_ball(sw, sh)
+            if want_ball:
+                # 用 _ensure_ball：它连「窗口被外部销毁过」这种情况一起处理。
+                self._ensure_ball()
         except Exception:
             # 运行中途新建窗口在部分环境下不被支持，
             # 那就等下次启动再生效，不要让程序崩掉
@@ -1064,7 +1201,7 @@ class App:
         except Exception:
             pass
 
-        # 通知主窗口刷新（悬浮球那边可能改了设置）
+        # 通知主窗口刷新（悬浮窗那边可能改了设置）
         self._eval_js(self.main, "window.refreshAll && window.refreshAll()")
 
     def _fire_reminder(self, moment, when_text: str) -> None:
@@ -1146,7 +1283,7 @@ class App:
     def run(self) -> None:
         self.build()
 
-        # 悬浮球没开、也没设提醒时，主窗口关掉程序就该结束。
+        # 悬浮窗没开、也没设提醒时，主窗口关掉程序就该结束。
         # debug=False 让打包后的程序不弹开发者工具。
         #
         # icon 是**全局**的，管的是所有窗口的标题栏左上角图标，不是单个窗口的。
@@ -1166,7 +1303,7 @@ class App:
 
 def main() -> int:
     # 单实例检查用不着 —— 同时开两个也不会互相破坏数据，
-    # 顶多是两个悬浮球。为这点小事引入文件锁不值得。
+    # 顶多是两个悬浮窗。为这点小事引入文件锁不值得。
     App().run()
     return 0
 

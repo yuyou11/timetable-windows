@@ -163,11 +163,11 @@ class Api:
         #
         #  而且它只在**无边框窗口**上触发：普通窗口的 AccessibilityObject
         #  链条会正常终止，无边框的不会。所以你看到的症状会是
-        #  「主窗口好好的，一加上悬浮球就崩」。
+        #  「主窗口好好的，一加上悬浮窗就崩」。
         # ------------------------------------------------------------
         self._window = None              # 主窗口，由 main.py 注入
-        self._ball_window = None         # 悬浮球窗口
-        self._on_settings_changed = None # 回调：让 main.py 重排定时器 / 开关悬浮球
+        self._ball_window = None         # 悬浮窗窗口
+        self._on_settings_changed = None # 回调：让 main.py 重排定时器 / 开关悬浮窗
         self._on_quit = None             # 回调：真正退出程序（需要停掉后台线程）
         self._on_show_main = None        # 回调：显示主窗口
         self._on_ball_drag_end = None    # 回调：拖完了，判断要不要吸附到边缘
@@ -380,15 +380,15 @@ class Api:
         }
 
     # ============================================================
-    #  悬浮球
+    #  悬浮窗
     # ============================================================
 
     def ball_state(self) -> dict[str, Any]:
         """
-        悬浮球需要的全部数据。
+        悬浮窗需要的全部数据。
 
         **刻意做成一个方法返回所有东西**，而不是让前端连着调好几个 ——
-        悬浮球刷新很频繁（每分钟至少一次），往返次数越少越好。
+        悬浮窗刷新很频繁（每分钟至少一次），往返次数越少越好。
         而且这样能保证「此刻」「接着」「进度」是同一时刻算出来的，
         不会出现「标题已经是下一节课了，但倒计时还是上一节的」这种撕裂。
         """
@@ -480,7 +480,7 @@ class Api:
         return {"ok": True}
 
     def hide_ball(self) -> dict[str, Any]:
-        """从悬浮球上直接关掉它。同时把设置也改掉，否则重启又冒出来了。"""
+        """从悬浮窗上直接关掉它。同时把设置也改掉，否则重启又冒出来了。"""
         self.store.ball_enabled = False
         self._notify_settings_changed()
         return {"ok": True, "settings": self._settings_dict()}
@@ -1244,7 +1244,7 @@ class Api:
     # ============================================================
 
     def _notify_settings_changed(self) -> None:
-        """设置变了 → 通知 main.py 重排定时器、开关悬浮球"""
+        """设置变了 → 通知 main.py 重排定时器、开关悬浮窗"""
         if self._on_settings_changed:
             self._on_settings_changed()
 
@@ -1254,7 +1254,7 @@ class Api:
 
         三个 `set_xxx` 原本是逐字相同的三段代码，只有属性名不同。
         抽出来是为了让**「通知」只有一处实现** —— 漏掉一次通知，定时器和
-        悬浮球开关就会停在旧状态，而且不会有任何报错。
+        悬浮窗开关就会停在旧状态，而且不会有任何报错。
         """
         setattr(self.store, name, value)
         self._notify_settings_changed()

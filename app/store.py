@@ -125,7 +125,7 @@ class Store:
 
     @property
     def enabled(self) -> bool:
-        """悬浮球总开关。关掉后程序不再主动刷新，也不发提醒"""
+        """悬浮窗总开关。关掉后程序不再主动刷新，也不发提醒"""
         return bool(self._data.get("enabled", False))
 
     @enabled.setter
