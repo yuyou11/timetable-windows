@@ -50,6 +50,7 @@ from .api import Api
 from .reminders import ReminderScheduler
 from .screen import (  # noqa: F401
     _bg_color,
+    _titlebar_colors,
     is_dark_mode,
     resolve_theme,
     resource_path,
@@ -473,6 +474,15 @@ class App:
             #
             # 换成轮询之后就没有这个窗口期了：窗口一出现就立刻返回，
             # 慢机器上多等一会儿也不会失败。
+            # 标题栏跟主题走 —— 主窗口是唯一带系统标题栏的（另两个无边框）。
+            # 页面换了色、标题栏没换，看着就是上下两截。
+            # 这里换一次就够：主题本来就是「重启后生效」。
+            bg, fg = _titlebar_colors(self.store.theme)
+            winutil.set_titlebar_theme(
+                winutil.TITLE_MAIN, bg, fg,
+                resolve_theme(self.store.theme) == "dark",
+            )
+
             # 下面两句是故意写成两句的：
             #   第一句拿 HWND（落位要用，见 _set_ball_rect）；
             #   第二句**那一行的写法被 tests/test_ball_ui.py 用正则钉住**

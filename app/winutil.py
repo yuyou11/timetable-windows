@@ -242,6 +242,65 @@ def disable_shadow(title: str) -> bool:
         return False
 
 
+DWMWA_USE_IMMERSIVE_DARK_MODE = 20    # 标题栏深/浅二选一（Win10 1809+）
+DWMWA_CAPTION_COLOR = 35              # 标题栏任意底色（Win11 22621+）
+DWMWA_TEXT_COLOR = 36                 # 标题栏文字色（同上）
+
+
+def _colorref(hex_color: str) -> int:
+    """`'#rrggbb'` → COLORREF（`0x00bbggrr`，**低位是红**，别按 RGBA 记）。"""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return r | (g << 8) | (b << 16)
+
+
+def set_titlebar_theme(title: str, bg_hex: str, text_hex: str, dark: bool) -> bool:
+    """
+    让**系统标题栏**跟着主题走。主窗口是唯一用得上的（另两个无边框）。
+
+    页面换了色、标题栏还停在系统默认的样子，看着就是上下两截 —— 所以这个
+    不是可有可无的美化，是主题这件事的**收尾**。
+
+    ## 两层做法，新的优先
+
+      1. `DWMWA_CAPTION_COLOR` / `DWMWA_TEXT_COLOR`（Win11 22621+）——
+         可以设成**和卡片一模一样**的颜色（`#ffffff` / `#181b21`）。
+      2. 再往前只有 `DWMWA_USE_IMMERSIVE_DARK_MODE`（Win10 1809+），
+         只能在「深 / 浅」之间切，颜色由系统定。
+
+    两个都拿不到（老系统、或者 DWM 不认）就返回 False，调用方不用管 ——
+    这属于「有更好、没有也能用」的修饰，不该因为它让程序起不来。
+    注意这一层调的是**加了 try 的**：DwmSetWindowAttribute 在不支持的属性上
+    会返回失败码，而有些环境会直接抛。
+
+    ⚠️ 只收 HWND，不按标题去找 —— 理由见 `set_window_rect`。
+    """
+    hwnd = _find(title)
+    if not hwnd:
+        return False
+
+    try:
+        dwm = ctypes.windll.dwmapi
+
+        # 1) 精确配色。**两个都要成功才算这条路走通** —— 只换底色不换文字色，
+        # 深色底配深色字就是看不见字，比不换还糟。
+        cap = ctypes.c_uint32(_colorref(bg_hex))
+        txt = ctypes.c_uint32(_colorref(text_hex))
+        if (dwm.DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR,
+                                      ctypes.byref(cap), ctypes.sizeof(cap)) == 0
+                and dwm.DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR,
+                                              ctypes.byref(txt), ctypes.sizeof(txt)) == 0):
+            return True
+
+        # 2) 退路：深 / 浅二选一
+        flag = ctypes.c_int(1 if dark else 0)
+        return dwm.DwmSetWindowAttribute(
+            hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
+            ctypes.byref(flag), ctypes.sizeof(flag)) == 0
+    except Exception:
+        return False
+
+
 def window_rect(title: str):
     """
     窗口的**物理像素**矩形 (left, top, right, bottom)，找不到返回 None。

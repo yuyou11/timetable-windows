@@ -107,6 +107,26 @@ def _bg_color(theme_pref: str = "system") -> str:
     return "#181b21" if resolve_theme(theme_pref) == "dark" else "#ffffff"
 
 
+def _titlebar_colors(theme_pref: str = "system") -> tuple[str, str]:
+    """
+    系统标题栏的（底色, 文字色），按设置里的主题给。
+
+    ## 为什么底色必须和 `_bg_color()` 同源
+
+    主窗口是三个窗口里唯一带**系统标题栏**的（悬浮窗、提示条都是无边框）。
+    页面换了色、标题栏还停在系统默认的样子，看着就是**上下两截**。
+
+    所以这里的底色取的就是 `_bg_color()` 那个值 —— 也就是页面里 `--surface`
+    的那个颜色。三处是三份独立写下的数据（Python 两个函数、CSS 三个页面），
+    `tests/test_theme.py` 把它们钉在一起。
+
+    文字色对应页面的 `--text`。
+    """
+    if resolve_theme(theme_pref) == "dark":
+        return "#181b21", "#e8eaed"
+    return "#ffffff", "#1a1d23"
+
+
 def resource_path(*parts: str) -> Path:
     """
     取资源文件的真实路径。

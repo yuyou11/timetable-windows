@@ -47,6 +47,29 @@ class TestWindowBackgroundMatchesSurface(unittest.TestCase):
                 f"改颜色请两边一起改（app/screen.py 的 _bg_color，和这里的 --surface）。",
             )
 
+    def test_titlebar_bg_is_the_same_source_as_window_bg(self):
+        """
+        标题栏底色必须**等于** `_bg_color()`，也就是页面的 `--surface`。
+
+        三处是三份独立写下的数据（`_bg_color`、`_titlebar_colors`、三个页面
+        的 CSS），对不上就是「页面换了色、标题栏还是原来那个」——上下两截。
+        """
+        from app.screen import _bg_color, _titlebar_colors
+
+        for pref in ("system", "light", "dark"):
+            bg, fg = _titlebar_colors(pref)
+            self.assertEqual(_bg_color(pref), bg.lower(),
+                             f"主题 {pref!r} 下标题栏底色和窗口底色对不上")
+            self.assertNotEqual(bg.lower(), fg.lower(),
+                                f"主题 {pref!r} 下标题栏底色和文字色撞色了")
+
+    def test_colorref_packs_bgr_not_rgb(self):
+        """COLORREF 是 0x00bbggrr（低位是红），按 RGBA 记就会变成另一种颜色。"""
+        from app.winutil import _colorref
+
+        self.assertEqual(0x211b18, _colorref("#181b21"))   # r=18 g=1b b=21
+        self.assertEqual(0xffffff, _colorref("#ffffff"))
+
     def test_every_page_can_accept_a_forced_theme(self):
         """
         三个窗口都得能接 Python 推过来的强制档，缺一个就是**只在那一个窗口**
