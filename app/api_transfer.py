@@ -6,28 +6,17 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
-from . import builtin_data, engine, format_spec, slots, wake_shift
+from . import engine, format_spec, slots
 from .ai_prompt import AiPrompt
-from .day_type_policy import DayTypePolicy
-from .models import DAY_TYPE_LABEL, DAY_TYPE_ORDER, Block, Course, DayType, Kind
-from .payloads import (  # noqa: F401
-    _block_dict,
-    _course_dict,
-    _moment_dict,
-    _parse_day_type,
-    _short_day_type,
-    _valid_index,
-)
+from .models import DAY_TYPE_ORDER
 from .store import Store
 
 
 class TransferMixin:
     """导入导出、AI 提示词，以及文件选择框。"""
-
 
     # ============================================================
     #  导入导出
@@ -76,8 +65,6 @@ class TransferMixin:
         # tests/test_api_serializable.py 把这条钉住了。
         return {"ok": True, "preview": self._preview_dict(parsed)}
 
-
-
     def confirm_import(self, mode: str) -> dict[str, Any]:
         """套用上一次解析的结果。mode: 'replace' | 'merge'"""
         parsed = self._pending_import
@@ -88,8 +75,6 @@ class TransferMixin:
         message = self.store.apply_import(parsed, mode)
         self._notify_settings_changed()
         return {"ok": True, "message": message}
-
-
 
     def _preview_dict(self, parsed: format_spec.Parsed) -> dict[str, Any]:
         self._pending_import = parsed
@@ -150,8 +135,6 @@ class TransferMixin:
             "warnings": parsed.warnings,
         }
 
-
-
     def export_to_file(self, include_schedule_config: bool) -> dict[str, Any]:
         """
         ⚠️ 参数名跟着手机版从 `include_templates` 改成了 `include_schedule_config`。
@@ -175,13 +158,9 @@ class TransferMixin:
         extra = " + 作息配置（模板与启用日型）" if include_schedule_config else ""
         return {"ok": True, "message": f"已导出 {count} 门课{extra}", "path": str(path)}
 
-
-
     def copy_json(self, include_schedule_config: bool) -> dict[str, Any]:
         text = self.store.export_json(bool(include_schedule_config))
         return {"ok": True, "text": text, "message": f"已复制（{len(text)} 字）"}
-
-
 
     def get_ai_prompt(self, kind: str) -> dict[str, Any]:
         """
@@ -207,8 +186,6 @@ class TransferMixin:
             )
         return {"ok": True, "text": text}
 
-
-
     def _ask_open_file(self) -> Optional[str]:
         if self._window is None:
             return None
@@ -221,8 +198,6 @@ class TransferMixin:
         if not result:
             return None
         return result[0] if isinstance(result, (list, tuple)) else result
-
-
 
     def _ask_save_file(self, default_name: str) -> Optional[str]:
         if self._window is None:

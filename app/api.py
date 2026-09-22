@@ -23,13 +23,10 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from pathlib import Path
 from typing import Any, Optional
 
-from . import builtin_data, engine, format_spec, slots, wake_shift
-from .ai_prompt import AiPrompt
-from .day_type_policy import DayTypePolicy
-from .models import DAY_TYPE_LABEL, DAY_TYPE_ORDER, Block, Course, DayType, Kind
+from . import engine, format_spec, slots
+from .models import DAY_TYPE_LABEL, DAY_TYPE_ORDER, Course, Kind
 from .store import Store
 
 #: 一周七天（周一=1 … 周日=7）。
@@ -45,15 +42,7 @@ WEEK_DAYS = 7
 
 # 纯函数（内部结构 → 前端 dict）搬去 `payloads.py` 了，各 Mixin 按需从那儿 import。
 # （`_fmt_duration` 不对外：它只被 payloads 内部那两个转换函数用到。）
-from .payloads import (  # noqa: E402
-    _block_dict,
-    _course_dict,
-    _moment_dict,
-    _parse_day_type,
-    _short_day_type,
-    _valid_index,
-)
-
+from .payloads import _moment_dict, _short_day_type
 
 
 from .api_ball import BallMixin
@@ -65,8 +54,6 @@ from .api_transfer import TransferMixin
 
 class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin):
     """暴露给 JS 的全部方法。改这里要同步改网页那边的调用。"""
-
-
 
     def __init__(self, store: Optional[Store] = None) -> None:
         #: 允许外部把 Store 传进来（main.py 就是这么做的）。
@@ -114,8 +101,6 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
         #: 让前端来回搬运大块数据，等于多一次「传丢了/传错了」的机会。
         self._pending_import: Optional[format_spec.Parsed] = None
 
-
-
     # ============================================================
     #  启动数据
     # ============================================================
@@ -134,8 +119,6 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
             "maxWeeks": format_spec.MAX_WEEK_LIMIT,
         }
 
-
-
     def _term_dict(self) -> dict[str, Any]:
         start = self.store.term_start
         today = date.today()
@@ -147,8 +130,6 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
             "weekOverride": self.store.week_override,
             "todayWeek": self.store.week_of(today),
         }
-
-
 
     def _settings_dict(self) -> dict[str, Any]:
         return {
@@ -163,8 +144,6 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
             "hasCustomScheduleConfig": self.store.has_custom_schedule_config,
             "dayTypes": self.store.day_type_policy().as_dict(),
         }
-
-
 
     # ============================================================
     #  今天
@@ -206,8 +185,6 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
             "clock": now.strftime("%H:%M"),
         }
 
-
-
     def _tomorrow_dict(self, courses: list[Course]) -> dict[str, Any]:
         """明天的预告：几点起、第一件事、有几节课、最后一项"""
         tomorrow = date.today() + timedelta(days=1)
@@ -247,8 +224,6 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
                 else None
             ),
         }
-
-
 
     # ============================================================
     #  课表
@@ -324,8 +299,6 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
             "rows": rows,
         }
 
-
-
     # ============================================================
     #  杂项
     # ============================================================
@@ -336,8 +309,6 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
         folder.mkdir(parents=True, exist_ok=True)
         subprocess.Popen(["explorer", str(folder)])
         return {"ok": True, "message": str(folder)}
-
-
 
     def log_error(self, message: str) -> dict[str, Any]:
         """
@@ -361,14 +332,10 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
             pass
         return {"ok": True}
 
-
-
     def quit_app(self) -> dict[str, Any]:
         if self._on_quit:
             self._on_quit()
         return {"ok": True}
-
-
 
     # ============================================================
     #  内部工具
@@ -378,8 +345,6 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
         """设置变了 → 通知 main.py 重排定时器、开关悬浮窗"""
         if self._on_settings_changed:
             self._on_settings_changed()
-
-
 
     def _apply_setting(self, name: str, value: Any) -> dict[str, Any]:
         """
@@ -392,8 +357,6 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
         setattr(self.store, name, value)
         self._notify_settings_changed()
         return self._settings_dict()
-
-
 
     def _courses_ok(self, message: str) -> dict[str, Any]:
         """
@@ -408,8 +371,6 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
         """
         self._notify_settings_changed()
         return {"ok": True, "message": message, "courses": self.get_courses()}
-
-
 
     def _templates_ok(self, message: str) -> dict[str, Any]:
         """

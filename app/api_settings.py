@@ -6,28 +6,14 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
-from pathlib import Path
-from typing import Any, Optional
+from datetime import date
+from typing import Any
 
-from . import builtin_data, engine, format_spec, slots, wake_shift
-from .ai_prompt import AiPrompt
-from .day_type_policy import DayTypePolicy
-from .models import DAY_TYPE_LABEL, DAY_TYPE_ORDER, Block, Course, DayType, Kind
-from .payloads import (  # noqa: F401
-    _block_dict,
-    _course_dict,
-    _moment_dict,
-    _parse_day_type,
-    _short_day_type,
-    _valid_index,
-)
-from .store import Store
+from . import builtin_data, engine
 
 
 class SettingsMixin:
     """设置页那几个开关，和学期信息。"""
-
 
     # ============================================================
     #  设置
@@ -36,17 +22,11 @@ class SettingsMixin:
     def set_enabled(self, value: bool) -> dict[str, Any]:
         return self._apply_setting("enabled", bool(value))
 
-
-
     def set_ball_enabled(self, value: bool) -> dict[str, Any]:
         return self._apply_setting("ball_enabled", bool(value))
 
-
-
     def set_remind_lead(self, minutes: int) -> dict[str, Any]:
         return self._apply_setting("remind_lead", int(minutes))
-
-
 
     def set_term(self, name: str, start_iso: str, total_weeks: int) -> dict[str, Any]:
         """
@@ -74,8 +54,6 @@ class SettingsMixin:
         if monday != picked:
             msg = f"已自动对齐到那一周的周一：{monday}"
         return {"ok": True, "message": msg, "term": self._term_dict()}
-
-
 
     def set_week_override(self, value: int) -> dict[str, Any]:
         self.store.week_override = max(0, int(value))

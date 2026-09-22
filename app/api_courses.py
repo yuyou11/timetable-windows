@@ -6,28 +6,16 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from . import builtin_data, engine, format_spec, slots, wake_shift
-from .ai_prompt import AiPrompt
-from .day_type_policy import DayTypePolicy
-from .models import DAY_TYPE_LABEL, DAY_TYPE_ORDER, Block, Course, DayType, Kind
-from .payloads import (  # noqa: F401
-    _block_dict,
-    _course_dict,
-    _moment_dict,
-    _parse_day_type,
-    _short_day_type,
-    _valid_index,
-)
+from . import format_spec, slots
+from .models import Course
+from .payloads import _course_dict, _valid_index
 from .store import Store
 
 
 class CoursesMixin:
     """课程增删改 —— 课程编辑页。"""
-
 
     # ============================================================
     #  课程编辑（图形化改 JSON 的核心）
@@ -35,8 +23,6 @@ class CoursesMixin:
 
     def get_courses(self) -> list[dict[str, Any]]:
         return [_course_dict(c, i) for i, c in enumerate(self.store.courses())]
-
-
 
     def save_course(self, payload: dict[str, Any], index: int = -1) -> dict[str, Any]:
         """
@@ -66,8 +52,6 @@ class CoursesMixin:
         self.store.save_courses(courses)
         return self._courses_ok(msg)
 
-
-
     def delete_course(self, index: int) -> dict[str, Any]:
         courses = self.store.courses()
         if not _valid_index(index, courses):
@@ -75,8 +59,6 @@ class CoursesMixin:
         removed = courses.pop(index)
         self.store.save_courses(courses)
         return self._courses_ok(f"已删除「{removed.name}」")
-
-
 
     def toggle_course(self, index: int, enabled: bool) -> dict[str, Any]:
         courses = self.store.courses()
@@ -88,8 +70,6 @@ class CoursesMixin:
         self.store.save_courses(courses)
         return self._courses_ok("")
 
-
-
     def clear_courses(self) -> dict[str, Any]:
         self.store.clear_courses()
         # 清空之后 get_courses() 必然是 []：Store.clear_courses 存的是 "[]"
@@ -97,13 +77,9 @@ class CoursesMixin:
         # （见 store.py 里 clear_courses 的注释）
         return self._courses_ok("已清空课表")
 
-
-
     def reset_courses(self) -> dict[str, Any]:
         self.store.reset_courses()
         return self._courses_ok("已恢复内置课表")
-
-
 
     def _course_from_payload(self, p: dict[str, Any]) -> Course:
         name = str(p.get("name", "")).strip()

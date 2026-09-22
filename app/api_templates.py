@@ -6,28 +6,16 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from . import builtin_data, engine, format_spec, slots, wake_shift
-from .ai_prompt import AiPrompt
+from . import engine, slots, wake_shift
 from .day_type_policy import DayTypePolicy
-from .models import DAY_TYPE_LABEL, DAY_TYPE_ORDER, Block, Course, DayType, Kind
-from .payloads import (  # noqa: F401
-    _block_dict,
-    _course_dict,
-    _moment_dict,
-    _parse_day_type,
-    _short_day_type,
-    _valid_index,
-)
-from .store import Store
+from .models import DAY_TYPE_LABEL, DAY_TYPE_ORDER, Block, DayType, Kind
+from .payloads import _block_dict, _parse_day_type, _valid_index
 
 
 class TemplatesMixin:
     """作息模板与日型策略 —— 作息编辑页、设置页的日型勾选。"""
-
 
     # ============================================================
     #  作息模板编辑
@@ -52,8 +40,6 @@ class TemplatesMixin:
                 for t in DAY_TYPE_ORDER
             ],
         }
-
-
 
     def save_template_block(self, day_type: str, payload: dict[str, Any],
                             index: int = -1) -> dict[str, Any]:
@@ -101,8 +87,6 @@ class TemplatesMixin:
         self.store.save_templates(full)
         return self._templates_ok("已保存")
 
-
-
     def delete_template_block(self, day_type: str, index: int) -> dict[str, Any]:
         day_type_enum = _parse_day_type(day_type)
         if day_type_enum is None:
@@ -119,8 +103,6 @@ class TemplatesMixin:
         full[day_type_enum] = blocks
         self.store.save_templates(full)
         return self._templates_ok(f"已删除「{removed.title}」")
-
-
 
     def shift_wake_time(self, day_type: str, new_time: str) -> dict[str, Any]:
         """
@@ -158,13 +140,9 @@ class TemplatesMixin:
         self._notify_settings_changed()
         return self._templates_ok(result.message)
 
-
-
     def reset_templates(self) -> dict[str, Any]:
         self.store.reset_templates()
         return self._templates_ok("已恢复内置作息模板")
-
-
 
     # ============================================================
     #  日型策略（v3）
@@ -198,8 +176,6 @@ class TemplatesMixin:
             "fallback": policy.fallback.value,
             "hasCustomDayTypes": self.store.has_custom_day_types,
         }
-
-
 
     def save_day_types(self, enabled: list, fallback: str) -> dict[str, Any]:
         """
@@ -263,15 +239,11 @@ class TemplatesMixin:
         self._notify_settings_changed()
         return self._day_types_ok(f"已启用 {len(chosen)} 种日型")
 
-
-
     def reset_day_types(self) -> dict[str, Any]:
         """恢复默认策略（A + 没早八的 B + 周末）"""
         self.store.reset_day_type_policy()
         self._notify_settings_changed()
         return self._day_types_ok("已恢复默认日型")
-
-
 
     def _day_types_ok(self, message: str) -> dict[str, Any]:
         """
@@ -286,8 +258,6 @@ class TemplatesMixin:
             "dayTypes": self.get_day_types(),
             "settings": self._settings_dict(),
         }
-
-
 
     def _block_from_payload(self, p: dict[str, Any]) -> Block:
         title = str(p.get("title", "")).strip()

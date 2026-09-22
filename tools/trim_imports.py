@@ -57,6 +57,10 @@ def trim(path: Path) -> bool:
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == "__future__":
             continue
+        if not isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue    # ⚠️ ast.walk 会把 Module / Class / FunctionDef 也吐出来，
+                        # 它们不是 import。漏了这道判断就会在 Module 上取 lineno，
+                        # 直接 AttributeError（第二版就栽在这儿）。
 
         # ⚠️ 保留原始缩进。函数体里的 `import x` 是缩进过的，
         # 重写成顶格就是 IndentationError（第一版就栽在这儿）。

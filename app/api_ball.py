@@ -6,28 +6,16 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
-from pathlib import Path
-from typing import Any, Optional
+from datetime import date, datetime
+from typing import Any
 
-from . import builtin_data, engine, format_spec, slots, wake_shift
-from .ai_prompt import AiPrompt
-from .day_type_policy import DayTypePolicy
-from .models import DAY_TYPE_LABEL, DAY_TYPE_ORDER, Block, Course, DayType, Kind
-from .payloads import (  # noqa: F401
-    _block_dict,
-    _course_dict,
-    _moment_dict,
-    _parse_day_type,
-    _short_day_type,
-    _valid_index,
-)
+from . import engine, slots
+from .payloads import _moment_dict
 from .store import Store
 
 
 class BallMixin:
     """悬浮窗桥接 —— 前端 `ball.js` 调的那几个方法，以及首次启动向导的落点。"""
-
 
     # ============================================================
     #  悬浮窗
@@ -61,8 +49,6 @@ class BallMixin:
             "next": {"time": slots.fmt(nxt.start), "title": nxt.title} if nxt else None,
         }
 
-
-
     def move_ball(self, dx: float, dy: float) -> dict[str, Any]:
         """
         把悬浮窗挪动 (dx, dy) 像素。
@@ -86,8 +72,6 @@ class BallMixin:
             return {"ok": False}
         return {"ok": True}
 
-
-
     def ball_drag_start(self) -> dict[str, Any]:
         """
         开始拖动了。
@@ -98,8 +82,6 @@ class BallMixin:
         if self._on_ball_drag_start:
             self._on_ball_drag_start()
         return {"ok": True}
-
-
 
     def ball_drag_end(self) -> dict[str, Any]:
         """
@@ -113,8 +95,6 @@ class BallMixin:
             return self._on_ball_drag_end()
         return {"ok": False}
 
-
-
     def ball_hover(self, entered: bool) -> dict[str, Any]:
         """
         鼠标进入 / 离开悬浮窗。
@@ -126,30 +106,22 @@ class BallMixin:
             return self._on_ball_hover(bool(entered))
         return {"ok": True}
 
-
-
     def ball_slide_out(self) -> dict[str, Any]:
         """手动把收起的悬浮窗拉出来（不依赖鼠标悬停）"""
         if self._on_ball_slide_out:
             return self._on_ball_slide_out()
         return {"ok": True}
 
-
-
     def show_main(self) -> dict[str, Any]:
         if self._on_show_main:
             self._on_show_main()
         return {"ok": True}
-
-
 
     def hide_ball(self) -> dict[str, Any]:
         """从悬浮窗上直接关掉它。同时把设置也改掉，否则重启又冒出来了。"""
         self.store.ball_enabled = False
         self._notify_settings_changed()
         return {"ok": True, "settings": self._settings_dict()}
-
-
 
     def mark_launched(self) -> dict[str, Any]:
         """
