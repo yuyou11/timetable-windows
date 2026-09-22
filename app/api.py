@@ -26,7 +26,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
-from . import builtin_data, engine, format_spec, slots
+from . import builtin_data, engine, format_spec, slots, wake_shift
 from .ai_prompt import AiPrompt
 from .day_type_policy import DayTypePolicy
 from .models import DAY_TYPE_LABEL, DAY_TYPE_ORDER, Block, Course, DayType, Kind
@@ -663,26 +663,10 @@ class Api:
 
     def shift_wake_time(self, day_type: str, new_time: str) -> dict[str, Any]:
         """
-        改起床时间 —— 一个动作改两格。
+        改起床时间 —— 一个动作改两格。算法和「为什么是这样」在 `wake_shift.py`。
 
-        ## 为什么需要这个专门的方法
-
-        模板里「睡觉」和「起床、洗漱」是**两格**：
-            睡觉        00:00–06:55
-            起床、洗漱   06:55–07:10
-
-        想把起床时间推到 07:30，就得同时改两格。但一格一格改是走不通的：
-
-            改「睡觉」→ 报错：和「起床、洗漱」重叠
-            改「起床、洗漱」→ 报错：和「睡觉」重叠
-
-        **用户会陷入死锁** —— 每一步都被拦下，而每一句报错听起来都很合理。
-
-        手机版的解法是「文档里写一句：两处都要改」。那在只有 JSON 的时代勉强能用，
-        但既然做了图形界面，就该让用户点一下搞定，而不是记住一条规则。
-
-        这也是做界面时值得记住的一点：
-        **凡是「用户必须按特定顺序做几件事」的地方，都值得做成一个动作。**
+        这里只负责桥接：把前端参数翻译成 `wake_shift.apply` 要的入参，
+        把结果翻译成前端要的 dict，并管好写盘和通知。
         """
         day_type_enum = _parse_day_type(day_type)
         if day_type_enum is None:
@@ -693,114 +677,25 @@ class Api:
             return {"ok": False, "message": f'时间 "{new_time}" 格式不对，应该是 "07:30" 这样'}
 
         full = self.store.templates()
-        blocks = sorted(full[day_type_enum], key=lambda b: b.start)
+        result = wake_shift.apply(full[day_type_enum], target)
 
-        # 找出「午前最后一个睡觉块」—— 和 engine.wake_minute() 用的是同一条规则，
-        # 保证「界面显示的起床时间」和「实际改的那一格」永远是同一个
-        sleep_idx = -1
-        best_end = -1
-        for i, b in enumerate(blocks):
-            if b.kind == Kind.SLEEP and b.start < engine.NOON and b.end > best_end:
-                best_end = b.end
-                sleep_idx = i
+        if not result.ok:
+            return {"ok": False, "message": result.message}
 
-        if sleep_idx < 0:
-            return {"ok": False, "message": "这套模板里没有上午的睡眠段，没法改起床时间"}
-
-        old = blocks[sleep_idx].end
-        if target == old:
-            return {"ok": True, "message": "起床时间没有变化",
+        if result.unchanged:
+            # 什么都没改，所以**不写盘、也不通知** —— 和改动前的行为一致。
+            # （这里刻意不用 _templates_ok：它会顺手通知一次。）
+            return {"ok": True, "message": result.message,
                     "templates": self.get_templates()}
 
-        delta = target - old
-
-        # ------------------------------------------------------------
-        #  只挪「起床 → 第一个锚点」之间那几格。
-        #
-        #  ## 为什么不能整段顺延
-        #
-        #  一开始我写的是「起床之后全部往后推」。跑测试才发现行不通：
-        #  模板是**一整天的完整分区**（00:00 到 24:00 排得满满的），
-        #  往后推必然把最后那格挤出 24:00。
-        #  往前推虽然不溢出，但末尾会留一截空白。
-        #
-        #  ## 锚点是什么
-        #
-        #  锚点 = **课表格子**（带 nodes 的那种）。它的时间是由学校课表决定的，
-        #  08:30 上课就是 08:30，不能因为你起晚了就延后。
-        #  这是整个作息里唯一真正「钉死」的东西。
-        #
-        #  所以正确的做法是：起床到第一个课表格子之间的事情（洗漱、早餐、早读）
-        #  跟着起床时间挪，撞到锚点就说明塞不下，如实报错。
-        #
-        #  周末模板里没有课表格子，就退而用「晚上最后一觉」当锚点。
-        # ------------------------------------------------------------
-        anchor_idx = None
-        for i in range(sleep_idx + 1, len(blocks)):
-            if blocks[i].nodes is not None:
-                anchor_idx = i
-                break
-        if anchor_idx is None:
-            for i in range(sleep_idx + 1, len(blocks)):
-                if blocks[i].kind == Kind.SLEEP:
-                    anchor_idx = i
-                    break
-        if anchor_idx is None:
-            return {
-                "ok": False,
-                "message": "这套模板里找不到「不能挪动的锚点」（课表格子或晚上的睡眠），没法安全地顺延。",
-            }
-
-        updated = list(blocks)
-        updated[sleep_idx] = updated[sleep_idx].copy(end=target)
-
-        for i in range(sleep_idx + 1, anchor_idx):
-            b = updated[i]
-            updated[i] = b.copy(start=b.start + delta, end=b.end + delta)
-
-        # ---- 校验 ----
-        #
-        #  注意检查的**顺序**：先报「塞不下锚点」，再报「跑到昨天」。
-        #
-        #  因为整段是**等量平移**的，段内各格的相对关系没变，
-        #  真正会出问题的只有两件事：撞上锚点、或者挪到 00:00 之前。
-        #  而「撞上锚点」是用户最可能遇到、也最需要解释清楚的那种 ——
-        #  先报它，用户才知道该删早读还是该改时间。
-        #  反过来的话，用户会先看到一句「格子重叠了」，一头雾水。
-        anchor = updated[anchor_idx]
-
-        if anchor_idx > sleep_idx + 1 and updated[anchor_idx - 1].end > anchor.start:
-            room = anchor.start - updated[sleep_idx].end
-            need = sum(updated[i].duration for i in range(sleep_idx + 1, anchor_idx))
-            why = "它是课表格子，跟着课表走，不能挪" if anchor.nodes else "它是固定的睡眠时段"
-            return {
-                "ok": False,
-                "message": (
-                    f"起床到「{anchor.title}」之间塞不下。\n\n"
-                    f"「{anchor.title}」固定在 {slots.fmt(anchor.start)} 开始（{why}），\n"
-                    f"从 {slots.fmt(updated[sleep_idx].end)} 起床算起只有 {room} 分钟，\n"
-                    f"而中间这几格加起来要 {need} 分钟。\n\n"
-                    f"如果本意是「起晚一点、不早读了」，请先到列表里删掉早读那一格，再改起床时间。"
-                ),
-            }
-
-        for i in range(sleep_idx, anchor_idx):
-            if updated[i].start < 0:
-                return {
-                    "ok": False,
-                    "message": f"这样改会让「{updated[i].title}」跑到昨天去，换个时间试试。",
-                }
-
-        full[day_type_enum] = updated
+        full[day_type_enum] = result.blocks
         self.store.save_templates(full)
+        # ⚠️ 这次通知是**重复**的：下面 `_templates_ok` 内部还会再通知一次。
+        # 改动前就是这样（本方法通知一次 + _templates_ok 通知一次），
+        # 而别的模板方法都只通知一次。本轮重构刻意保留原样、不改行为；
+        # 要不要收敛成一次，单独决定。
         self._notify_settings_changed()
-
-        moved = anchor_idx - sleep_idx - 1
-        direction = "推迟" if delta > 0 else "提前"
-        return self._templates_ok(
-            f"起床时间已{direction}到 {slots.fmt(target)}"
-            + (f"，后面 {moved} 格跟着挪" if moved else "")
-        )
+        return self._templates_ok(result.message)
 
     def reset_templates(self) -> dict[str, Any]:
         self.store.reset_templates()
