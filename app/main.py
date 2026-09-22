@@ -47,6 +47,7 @@ from .api import Api
 #    星号导入不导入下划线开头的名字，`_bg_color` 会静默消失，
 #    而 tools/exp_dock.py 正依赖它。
 #    tests/test_main_helpers.py 的 test_main_does_not_star_import_screen 盯着这条。
+from .reminders import ReminderScheduler
 from .screen import (  # noqa: F401
     _bg_color,
     is_dark_mode,
@@ -105,99 +106,6 @@ def _ease_out(t: float) -> float:
     所以大部分位移发生在前半段，后半段在慢慢贴上去。
     """
     return 1.0 - (1.0 - t) ** 3
-
-
-# ============================================================
-#  提醒调度
-# ============================================================
-
-class ReminderScheduler(threading.Thread):
-    """
-    课前提醒。
-
-    设计要点和手机版一致：
-      · 算出**下一个需要醒来的时刻**，然后睡到那时候 —— 不轮询
-      · 去重键（日期|开始时刻|课程名）持久化，避免同一节课提醒两次
-      · 只对「课」提醒，不对吃饭睡觉提醒（那些不需要提前准备）
-    """
-
-    def __init__(self, store: Store, on_fire) -> None:
-        super().__init__(daemon=True, name="reminder")
-        self.store = store
-        self.on_fire = on_fire
-        self._stop = threading.Event()
-        self._wake = threading.Event()
-
-    def stop(self) -> None:
-        self._stop.set()
-        self._wake.set()
-
-    def kick(self) -> None:
-        """设置变了 → 立刻重算，不用等睡满"""
-        self._wake.set()
-
-    def run(self) -> None:
-        while not self._stop.is_set():
-            delay = self._next_delay()
-            # wait 会在超时或 kick() 时返回，两种情况下都重新算一遍
-            self._wake.wait(timeout=delay)
-            self._wake.clear()
-            if self._stop.is_set():
-                return
-            self._check_and_fire()
-
-    def _next_delay(self) -> float:
-        """
-        距离下一次该检查还有多少秒。
-
-        不精确计算到「提醒时刻」，而是**最多睡 60 秒**——
-        因为用户随时可能改设置、改课表，睡太久会让改动延迟生效。
-        60 秒一次的空转几乎不耗电，同时保证了响应性。
-
-        真正省资源的地方在于：**这个线程什么都不做就只是在等待**，
-        没有循环、没有计算、没有 DOM 操作。
-        """
-        return 60.0
-
-    def _check_and_fire(self) -> None:
-        try:
-            store = self.store
-            store.load()               # 重新读盘，拿到别的窗口刚写进去的改动
-
-            lead = store.remind_lead
-            if lead <= 0:
-                return
-
-            now = datetime.now()
-            today = now.date()
-            minute = now.hour * 60 + now.minute
-
-            # 模板和策略成对取 —— 提醒排的时刻必须和界面显示的一致，
-            # 否则会出现「界面说今天 06:55 起，闹钟却按 07:25 响」。
-            templates, policy = store.template_set()
-            items = engine.moments(
-                today, store.week_of(today), store.courses(), templates, policy
-            )
-
-            # 窗口取 ±1 分钟：60 秒的检查间隔下，正好能覆盖到
-            for m in items:
-                if not m.is_course:
-                    continue
-                if abs(m.start - lead - minute) > 1:
-                    continue
-
-                key = f"{today.isoformat()}|{m.start}|{m.title}"
-                if store.last_reminder_key == key:
-                    continue
-                store.last_reminder_key = key
-
-                left = m.start - minute
-                when = "现在就开始" if left <= 0 else f"{left} 分钟后"
-                self.on_fire(m, when)
-                return
-        except Exception:
-            # 提醒失败不能把线程搞死 —— 那样之后所有提醒都没了，而且没人知道
-            pass
 
 
 # ============================================================
