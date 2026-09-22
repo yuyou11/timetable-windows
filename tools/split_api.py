@@ -117,6 +117,9 @@ from .store import Store
 
 NOTE = "\n（由 `tools/split_api.py` 从 `api.py` 原样切出，**一字未改**。）\n"
 
+#: 方法之间隔几行。PEP8 在类体内是 1 行。
+SEP = "\n"
+
 
 def is_docstring(node: ast.AST) -> bool:
     return (
@@ -169,22 +172,22 @@ def main() -> int:
 
     # ---- 写出各个 Mixin ----
     for fname, (cls, desc, names) in GROUPS.items():
-        body = "\n\n\n".join(methods[n] for n in names)
+        body = SEP.join(methods[n] for n in names)
         out = f'"""\n{desc}\n{NOTE}"""\n\n' + HEADER_IMPORTS + f"\n\nclass {cls}:\n"
-        out += '    """' + desc + '"""\n\n\n' + body
+        out += '    """' + desc + '"""\n\n' + body
         (ROOT / "app" / fname).write_text(out, encoding="utf-8")
         print(f"  写出 app/{fname:18} {cls:16} {len(names)} 个方法")
 
     # ---- 重写 api.py：只留核心方法 + 组装 ----
     header = "".join(lines[: api_cls.lineno - 1])
     kept = [n for n, _ in methods.items() if n not in claimed]
-    body = "\n\n\n".join(methods[n] for n in kept)
+    body = SEP.join(methods[n] for n in kept)
 
     bases = ", ".join(cls for cls, _d, _n in GROUPS.values())
     imports = "\n".join(
         f"from .{Path(f).stem} import {cls}" for f, (cls, _d, _n) in GROUPS.items()
     )
-    head = f"{header}\n{imports}\n\n\nclass Api({bases}):\n{class_doc}\n\n\n"
+    head = f"{header}\n{imports}\n\n\nclass Api({bases}):\n{class_doc}\n"
     API.write_text(head + body, encoding="utf-8")
 
     print(f"\n  重写 app/api.py              {len(kept)} 个方法留在核心类")

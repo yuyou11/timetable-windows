@@ -43,10 +43,8 @@ from .store import Store
 WEEK_DAYS = 7
 
 
-# 下面这几个是纯函数（内部结构 → 前端 dict），搬去 `payloads.py` 了 ——
-# 它们不碰 store、不碰窗口，和桥接编排混在一起只会把本文件撑到 1300 行。
-# 在这里 import 回来，是为了让下面二十来处调用点一行都不用改。
-# （`_fmt_duration` 不列在这儿：它只被 payloads 内部那两个转换函数用到。）
+# 纯函数（内部结构 → 前端 dict）搬去 `payloads.py` 了，各 Mixin 按需从那儿 import。
+# （`_fmt_duration` 不对外：它只被 payloads 内部那两个转换函数用到。）
 from .payloads import (  # noqa: E402
     _block_dict,
     _course_dict,
