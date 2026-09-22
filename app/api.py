@@ -57,8 +57,18 @@ from .payloads import (  # noqa: E402
 )
 
 
-class Api:
+
+from .api_ball import BallMixin
+from .api_settings import SettingsMixin
+from .api_courses import CoursesMixin
+from .api_templates import TemplatesMixin
+from .api_transfer import TransferMixin
+
+
+class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin):
     """暴露给 JS 的全部方法。改这里要同步改网页那边的调用。"""
+
+
 
     def __init__(self, store: Optional[Store] = None) -> None:
         #: 允许外部把 Store 传进来（main.py 就是这么做的）。
@@ -106,6 +116,8 @@ class Api:
         #: 让前端来回搬运大块数据，等于多一次「传丢了/传错了」的机会。
         self._pending_import: Optional[format_spec.Parsed] = None
 
+
+
     # ============================================================
     #  启动数据
     # ============================================================
@@ -124,6 +136,8 @@ class Api:
             "maxWeeks": format_spec.MAX_WEEK_LIMIT,
         }
 
+
+
     def _term_dict(self) -> dict[str, Any]:
         start = self.store.term_start
         today = date.today()
@@ -135,6 +149,8 @@ class Api:
             "weekOverride": self.store.week_override,
             "todayWeek": self.store.week_of(today),
         }
+
+
 
     def _settings_dict(self) -> dict[str, Any]:
         return {
@@ -149,6 +165,8 @@ class Api:
             "hasCustomScheduleConfig": self.store.has_custom_schedule_config,
             "dayTypes": self.store.day_type_policy().as_dict(),
         }
+
+
 
     # ============================================================
     #  今天
@@ -190,6 +208,8 @@ class Api:
             "clock": now.strftime("%H:%M"),
         }
 
+
+
     def _tomorrow_dict(self, courses: list[Course]) -> dict[str, Any]:
         """明天的预告：几点起、第一件事、有几节课、最后一项"""
         tomorrow = date.today() + timedelta(days=1)
@@ -229,6 +249,8 @@ class Api:
                 else None
             ),
         }
+
+
 
     # ============================================================
     #  课表
@@ -304,722 +326,7 @@ class Api:
             "rows": rows,
         }
 
-    # ============================================================
-    #  悬浮窗
-    # ============================================================
 
-    def ball_state(self) -> dict[str, Any]:
-        """
-        悬浮窗需要的全部数据。
-
-        **刻意做成一个方法返回所有东西**，而不是让前端连着调好几个 ——
-        悬浮窗刷新很频繁（每分钟至少一次），往返次数越少越好。
-        而且这样能保证「此刻」「接着」「进度」是同一时刻算出来的，
-        不会出现「标题已经是下一节课了，但倒计时还是上一节的」这种撕裂。
-        """
-        today = date.today()
-        week = self.store.week_of(today)
-        courses = self.store.courses()
-        templates, policy = self.store.template_set()
-        items = engine.moments(today, week, courses, templates, policy)
-
-        now = datetime.now()
-        minute = now.hour * 60 + now.minute
-        current = engine.current_at(items, minute)
-        nxt = engine.next_after(items, minute)
-
-        return {
-            "ok": True,
-            "week": week,
-            "dayTypeLabel": engine.day_type_display(today, week, courses, policy),
-            "now": _moment_dict(current, minute) if current else None,
-            "next": {"time": slots.fmt(nxt.start), "title": nxt.title} if nxt else None,
-        }
-
-    def move_ball(self, dx: float, dy: float) -> dict[str, Any]:
-        """
-        把悬浮窗挪动 (dx, dy) 像素。
-
-        为什么不是「设置窗口位置 (x, y)」？
-        因为前端只能拿到鼠标的相对位移（screenX 的差值），拿不到窗口的绝对位置。
-        让 Python 累加位移，比前端去猜窗口在哪可靠得多。
-
-        实际的移动和边界限制交给 main.py —— 那边才有窗口尺寸和屏幕信息。
-        """
-        if self._on_ball_move is not None:
-            return self._on_ball_move(dx, dy)
-
-        if self._ball_window is None:
-            return {"ok": False}
-        try:
-            x, y = self._ball_window.x, self._ball_window.y
-            self._ball_window.move(int(x + dx), int(y + dy))
-        except Exception:
-            # 移动失败不该让程序崩 —— 顶多是拖不动
-            return {"ok": False}
-        return {"ok": True}
-
-    def ball_drag_start(self) -> dict[str, Any]:
-        """
-        开始拖动了。
-
-        存在的意义只有一个：如果悬浮窗正贴边收起，**先让它弹出来再拖**。
-        否则用户拖的是一条 26 像素宽的细缝，很容易以为「拖没了」。
-        """
-        if self._on_ball_drag_start:
-            self._on_ball_drag_start()
-        return {"ok": True}
-
-    def ball_drag_end(self) -> dict[str, Any]:
-        """
-        拖完了。由 main.py 判断要不要吸附到边缘。
-
-        为什么判断放在 Python 而不是 JS？
-        因为几何计算是纯数学，放在 Python 里能写单元测试（见 app/dock.py）。
-        放在 JS 里就只能靠肉眼看了。
-        """
-        if self._on_ball_drag_end:
-            return self._on_ball_drag_end()
-        return {"ok": False}
-
-    def ball_hover(self, entered: bool) -> dict[str, Any]:
-        """
-        鼠标进入 / 离开悬浮窗。
-
-        网页只能知道「鼠标离开了我的可视区域」，但它不知道这意味着什么 ——
-        该不该缩回去，取决于窗口是不是停靠在边上。所以交给 Python 决定。
-        """
-        if self._on_ball_hover:
-            return self._on_ball_hover(bool(entered))
-        return {"ok": True}
-
-    def ball_slide_out(self) -> dict[str, Any]:
-        """手动把收起的悬浮窗拉出来（不依赖鼠标悬停）"""
-        if self._on_ball_slide_out:
-            return self._on_ball_slide_out()
-        return {"ok": True}
-
-    def show_main(self) -> dict[str, Any]:
-        if self._on_show_main:
-            self._on_show_main()
-        return {"ok": True}
-
-    def hide_ball(self) -> dict[str, Any]:
-        """从悬浮窗上直接关掉它。同时把设置也改掉，否则重启又冒出来了。"""
-        self.store.ball_enabled = False
-        self._notify_settings_changed()
-        return {"ok": True, "settings": self._settings_dict()}
-
-    def mark_launched(self) -> dict[str, Any]:
-        """
-        首次启动向导走完了，写进数据文件，下次不再问。
-
-        ⚠️ 这个方法曾经**不存在** —— app.js 一直在调 `call('mark_launched')`，
-        但 `Api` 上从来没有它（只在 `Store` 上，而 `Store` 带着
-        `_serializable = False`，被 pywebview 挡在桥外）。
-        后果是首次启动走完向导会弹一个「出错了」，而且这个标记永远写不进去。
-
-        这类缺陷运行时只会表现为「点了没反应」或一句含糊的提示，
-        所以现在由 tests/test_api_contract.py 在测试期把名字契约钉住。
-        """
-        self.store.mark_launched()
-        return {"ok": True}
-
-    # ============================================================
-    #  设置
-    # ============================================================
-
-    def set_enabled(self, value: bool) -> dict[str, Any]:
-        return self._apply_setting("enabled", bool(value))
-
-    def set_ball_enabled(self, value: bool) -> dict[str, Any]:
-        return self._apply_setting("ball_enabled", bool(value))
-
-    def set_remind_lead(self, minutes: int) -> dict[str, Any]:
-        return self._apply_setting("remind_lead", int(minutes))
-
-    def set_term(self, name: str, start_iso: str, total_weeks: int) -> dict[str, Any]:
-        """
-        改学期设置。
-
-        和手机版一样，起始日**自动吸附到周一** —— 整个时间轴是按
-        「第 N 周 = 起始日 + (N-1)×7 天」推的，起始日不是周一就全错位。
-        JSON 导入时这种情况会报错（用户不在场），
-        但界面里用户就在屏幕前，顺手改对比甩个错误更好。
-        """
-        try:
-            picked = date.fromisoformat(start_iso)
-        except ValueError:
-            return {"ok": False, "message": "日期格式不对，应该是 2026-09-07 这样"}
-
-        monday = engine.monday_of(picked)
-        self.store.term_name = name or builtin_data.TERM_NAME
-        self.store.term_start = monday
-        self.store.total_weeks = int(total_weeks)
-        # 改了起始日，之前手动钉死的周次就没意义了
-        self.store.week_override = 0
-        self._notify_settings_changed()
-
-        msg = "已保存"
-        if monday != picked:
-            msg = f"已自动对齐到那一周的周一：{monday}"
-        return {"ok": True, "message": msg, "term": self._term_dict()}
-
-    def set_week_override(self, value: int) -> dict[str, Any]:
-        self.store.week_override = max(0, int(value))
-        self._notify_settings_changed()
-        return self._term_dict()
-
-    # ============================================================
-    #  课程编辑（图形化改 JSON 的核心）
-    # ============================================================
-
-    def get_courses(self) -> list[dict[str, Any]]:
-        return [_course_dict(c, i) for i, c in enumerate(self.store.courses())]
-
-    def save_course(self, payload: dict[str, Any], index: int = -1) -> dict[str, Any]:
-        """
-        新增或修改一门课。
-
-        index = -1 表示新增，否则是替换第 index 条。
-
-        这里对输入做了完整校验，**报错文案和 JSON 导入那边保持一致** ——
-        用户在图形界面里被拦下，和在 JSON 里被拦下，看到的应该是同一套规则。
-        两套规则会让人迷惑，也会让「图形界面比手写宽松」变成 bug 的温床。
-        """
-        try:
-            course = self._course_from_payload(payload)
-        except ValueError as e:
-            return {"ok": False, "message": str(e)}
-
-        courses = self.store.courses()
-        if index < 0:
-            courses.append(course)
-            msg = f"已添加「{course.name}」"
-        else:
-            if not _valid_index(index, courses):
-                return {"ok": False, "message": "这条课程已经不存在了，列表可能已经刷新"}
-            courses[index] = course
-            msg = f"已修改「{course.name}」"
-
-        self.store.save_courses(courses)
-        return self._courses_ok(msg)
-
-    def delete_course(self, index: int) -> dict[str, Any]:
-        courses = self.store.courses()
-        if not _valid_index(index, courses):
-            return {"ok": False, "message": "这条课程已经不存在了"}
-        removed = courses.pop(index)
-        self.store.save_courses(courses)
-        return self._courses_ok(f"已删除「{removed.name}」")
-
-    def toggle_course(self, index: int, enabled: bool) -> dict[str, Any]:
-        courses = self.store.courses()
-        if not _valid_index(index, courses):
-            return {"ok": False, "message": "这条课程已经不存在了"}
-        c = courses[index]
-        courses[index] = Course(c.name, c.day_of_week, c.start_node, c.end_node,
-                                c.weeks, c.place, bool(enabled), c.id)
-        self.store.save_courses(courses)
-        return self._courses_ok("")
-
-    def clear_courses(self) -> dict[str, Any]:
-        self.store.clear_courses()
-        # 清空之后 get_courses() 必然是 []：Store.clear_courses 存的是 "[]"
-        # 而不是把键删掉，所以不会触发「懒加载内置课表」那条路
-        # （见 store.py 里 clear_courses 的注释）
-        return self._courses_ok("已清空课表")
-
-    def reset_courses(self) -> dict[str, Any]:
-        self.store.reset_courses()
-        return self._courses_ok("已恢复内置课表")
-
-    def _course_from_payload(self, p: dict[str, Any]) -> Course:
-        name = str(p.get("name", "")).strip()
-        if not name:
-            raise ValueError("课程名不能为空")
-
-        try:
-            dow = int(p.get("dayOfWeek", 1))
-        except (TypeError, ValueError):
-            raise ValueError("星期必须是 1–7 的数字") from None
-        if not 1 <= dow <= 7:
-            raise ValueError(f"星期必须在 1–7 之间（周一=1，周日=7），现在是 {dow}")
-
-        try:
-            start_node = int(p.get("startNode", 1))
-            end_node = int(p.get("endNode", 1))
-        except (TypeError, ValueError):
-            raise ValueError("节次必须是数字") from None
-        if not (1 <= start_node <= slots.MAX_NODE and 1 <= end_node <= slots.MAX_NODE):
-            raise ValueError(f"节次必须在 1–{slots.MAX_NODE} 之间")
-        if start_node > end_node:
-            raise ValueError("起始节次不能比结束节次大")
-
-        weeks_text = str(p.get("weeks", "")).strip()
-        if not weeks_text:
-            raise ValueError('周次不能为空，写法如 "2-4,6-17"，或 "*" 表示全学期')
-        try:
-            weeks = format_spec.parse_weeks(weeks_text, self.store.total_weeks)
-        except format_spec.FormatError as e:
-            raise ValueError(str(e)) from None
-
-        return Course(
-            name=name,
-            day_of_week=dow,
-            start_node=start_node,
-            end_node=end_node,
-            weeks=weeks,
-            place=str(p.get("place", "")).strip(),
-            enabled=bool(p.get("enabled", True)),
-        )
-
-    # ============================================================
-    #  作息模板编辑
-    # ============================================================
-
-    def get_templates(self) -> dict[str, Any]:
-        """返回六种日型的格子，并把「哪些是用户改过的」标出来"""
-        custom = self.store.custom_templates()
-        merged = self.store.templates()
-        return {
-            "customized": [t.value for t in custom],
-            "types": [
-                {
-                    "key": t.value,
-                    "label": DAY_TYPE_LABEL[t],
-                    "isCustom": t in custom,
-                    "wake": (
-                        slots.fmt(w) if (w := engine.wake_minute(merged[t])) is not None else None
-                    ),
-                    "blocks": [_block_dict(b) for b in merged[t]],
-                }
-                for t in DAY_TYPE_ORDER
-            ],
-        }
-
-    def save_template_block(self, day_type: str, payload: dict[str, Any],
-                            index: int = -1) -> dict[str, Any]:
-        day_type_enum = _parse_day_type(day_type)
-        if day_type_enum is None:
-            return {"ok": False, "message": f"未知的日型：{day_type}"}
-
-        try:
-            block = self._block_from_payload(payload)
-        except ValueError as e:
-            return {"ok": False, "message": str(e)}
-
-        # 从「当前的完整六套」出发做修改，再整份存成自定义模板。
-        # 这样即使用户只改了一格，存下来的也是完整的一套 ——
-        # 避免「改了一格，其余几格悄悄回落到内置」这种难以察觉的行为。
-        full = self.store.templates()
-        blocks = list(full[day_type_enum])
-
-        if index < 0:
-            blocks.append(block)
-        elif _valid_index(index, blocks):
-            blocks[index] = block
-        else:
-            return {"ok": False, "message": "这一格已经不存在了，列表可能已经刷新"}
-
-        blocks.sort(key=lambda b: b.start)
-
-        # 重叠必须拦下来：引擎遇到重叠会「先到先得」把后一格静默截断，
-        # 用户写的某一格就这么没了，界面上还看不出来。
-        for prev, cur in zip(blocks, blocks[1:]):
-            if cur.start < prev.end:
-                return {
-                    "ok": False,
-                    "message": (
-                        f"这两格时间重叠了：\n\n"
-                        f"　{slots.fmt(prev.start)}–{slots.fmt(prev.end)}　{prev.title}\n"
-                        f"　{slots.fmt(cur.start)}–{slots.fmt(cur.end)}　{cur.title}\n\n"
-                        f"同一时刻只能有一件固定的事。\n"
-                        f"如果你的本意是改起床时间，注意「睡觉」和后面的「起床、洗漱」"
-                        f"是两格，两格都要改。"
-                    ),
-                }
-
-        full[day_type_enum] = blocks
-        self.store.save_templates(full)
-        return self._templates_ok("已保存")
-
-    def delete_template_block(self, day_type: str, index: int) -> dict[str, Any]:
-        day_type_enum = _parse_day_type(day_type)
-        if day_type_enum is None:
-            return {"ok": False, "message": f"未知的日型：{day_type}"}
-
-        full = self.store.templates()
-        blocks = list(full[day_type_enum])
-        if not _valid_index(index, blocks):
-            return {"ok": False, "message": "这一格已经不存在了"}
-        if len(blocks) <= 1:
-            return {"ok": False, "message": "至少要留一格，否则这一天就没有作息了"}
-
-        removed = blocks.pop(index)
-        full[day_type_enum] = blocks
-        self.store.save_templates(full)
-        return self._templates_ok(f"已删除「{removed.title}」")
-
-    def shift_wake_time(self, day_type: str, new_time: str) -> dict[str, Any]:
-        """
-        改起床时间 —— 一个动作改两格。算法和「为什么是这样」在 `wake_shift.py`。
-
-        这里只负责桥接：把前端参数翻译成 `wake_shift.apply` 要的入参，
-        把结果翻译成前端要的 dict，并管好写盘和通知。
-        """
-        day_type_enum = _parse_day_type(day_type)
-        if day_type_enum is None:
-            return {"ok": False, "message": f"未知的日型：{day_type}"}
-
-        target = slots.parse_hhmm(new_time.strip(), is_end=False)
-        if target is None:
-            return {"ok": False, "message": f'时间 "{new_time}" 格式不对，应该是 "07:30" 这样'}
-
-        full = self.store.templates()
-        result = wake_shift.apply(full[day_type_enum], target)
-
-        if not result.ok:
-            return {"ok": False, "message": result.message}
-
-        if result.unchanged:
-            # 什么都没改，所以**不写盘、也不通知** —— 和改动前的行为一致。
-            # （这里刻意不用 _templates_ok：它会顺手通知一次。）
-            return {"ok": True, "message": result.message,
-                    "templates": self.get_templates()}
-
-        full[day_type_enum] = result.blocks
-        self.store.save_templates(full)
-        # ⚠️ 这次通知是**重复**的：下面 `_templates_ok` 内部还会再通知一次。
-        # 改动前就是这样（本方法通知一次 + _templates_ok 通知一次），
-        # 而别的模板方法都只通知一次。本轮重构刻意保留原样、不改行为；
-        # 要不要收敛成一次，单独决定。
-        self._notify_settings_changed()
-        return self._templates_ok(result.message)
-
-    def reset_templates(self) -> dict[str, Any]:
-        self.store.reset_templates()
-        return self._templates_ok("已恢复内置作息模板")
-
-    # ============================================================
-    #  日型策略（v3）
-    # ============================================================
-
-    def get_day_types(self) -> dict[str, Any]:
-        """
-        日型策略的现状，给设置页那几个复选框用。
-
-        返回里带上**每个日型的起床时间** —— 界面要在选项旁边显示它。
-        没有这个信息的话，用户勾选时看不出代价：
-        「把工作日全勾成 A 型」意味着没早八的日子也 06:55 起床，
-        而那正是这个程序最该帮人避免的事。
-        """
-        policy = self.store.day_type_policy()
-        templates = self.store.templates()
-
-        types = []
-        for t in DAY_TYPE_ORDER:
-            w = engine.wake_minute(templates[t])
-            types.append({
-                "key": t.value,
-                "label": DAY_TYPE_LABEL[t],
-                "wake": slots.fmt(w) if w is not None else None,
-                "enabled": t in policy.enabled,
-                "isFallback": t is policy.fallback,
-            })
-
-        return {
-            "types": types,
-            "fallback": policy.fallback.value,
-            "hasCustomDayTypes": self.store.has_custom_day_types,
-        }
-
-    def save_day_types(self, enabled: list, fallback: str) -> dict[str, Any]:
-        """
-        保存勾选结果。
-
-        ## 两道校验，都是为了挡住「看不出来但很糟糕」的配置
-
-        **① `enabled` 不能为空。** 那样每天都会落到 fallback 上，
-        等于把整套日型系统废掉 —— 几乎不可能是本意，多半是手滑全取消了。
-        格式标准里这一条也是**报错**而不是静默接受。
-
-        **② `fallback` 必须在 `enabled` 里。**
-
-        ⚠️ 这一条**和格式标准相反**，是刻意的：
-
-            文件里      fallback 允许不在 enabled 里（那是正当用法，
-                        "只启用 A 和周末，但周中没早八时回落成 B 型"）
-            界面上      这里只能从勾选项里选，因为这是一个下拉框 ——
-                        让用户在下拉里选一个**没勾选**的日型，
-                        等于给了一个自相矛盾的控件
-
-        界面的约束比文件的约束**更紧**：文件要容纳所有合法写法，
-        而界面应该只呈现能自洽的组合。用户真需要那种配置，
-        导入一份文件即可，那个入口一直开着。
-        """
-        # 先做校验，再把 key 转成枚举
-        chosen: list[DayType] = []
-        for raw in enabled or []:
-            t = _parse_day_type(str(raw))
-            if t is None:
-                return {"ok": False, "message": f"未知的日型：{raw}"}
-            if t not in chosen:
-                chosen.append(t)
-
-        if not chosen:
-            return {
-                "ok": False,
-                "message": "至少要启用一种日型。\n"
-                           "全都取消的话，每一天都会落到「回落到」那一种上，"
-                           "等于这个设置没有意义。",
-            }
-
-        fb = _parse_day_type(str(fallback))
-        if fb is None:
-            return {"ok": False, "message": f"未知的回落日型：{fallback}"}
-        if fb not in chosen:
-            return {
-                "ok": False,
-                "message": f"「回落到」选的是 {DAY_TYPE_LABEL[fb]}，但它没有被勾选。\n"
-                           "回落的含义是「算出来的日型没启用时，改用哪一种」——"
-                           "所以它自己得是启用的。\n"
-                           "（如果你确实需要「启用 A 和周末、却回落到 B 型」这种配置，"
-                           "可以导入一份带 dayTypes 段的文件，文件里允许这样写。）",
-            }
-
-        self.store.save_day_type_policy(
-            DayTypePolicy(enabled=frozenset(chosen), fallback=fb)
-        )
-        # 必须通知：提醒线程要按新的日型重排 —— 起床时间一改，
-        # 「下一个切换时刻」就变了。漏掉这一步不会报错，只是闹钟停在旧时间上。
-        self._notify_settings_changed()
-        return self._day_types_ok(f"已启用 {len(chosen)} 种日型")
-
-    def reset_day_types(self) -> dict[str, Any]:
-        """恢复默认策略（A + 没早八的 B + 周末）"""
-        self.store.reset_day_type_policy()
-        self._notify_settings_changed()
-        return self._day_types_ok("已恢复默认日型")
-
-    def _day_types_ok(self, message: str) -> dict[str, Any]:
-        """
-        保存成功后的统一回包。
-
-        和 `_templates_ok` 一样，**先通知再取数据** —— 反过来的话
-        回给前端的可能不是通知之后的状态。
-        """
-        return {
-            "ok": True,
-            "message": message,
-            "dayTypes": self.get_day_types(),
-            "settings": self._settings_dict(),
-        }
-
-    def _block_from_payload(self, p: dict[str, Any]) -> Block:
-        title = str(p.get("title", "")).strip()
-        if not title:
-            raise ValueError("这一格要显示什么？不能为空")
-
-        start = slots.parse_hhmm(str(p.get("start", "")).strip(), is_end=False)
-        if start is None:
-            raise ValueError('开始时刻格式不对，应该是 "06:55" 这样')
-
-        end = slots.parse_hhmm(str(p.get("end", "")).strip(), is_end=True)
-        if end is None:
-            raise ValueError('结束时刻格式不对，应该是 "07:10" 这样（一天最后一段可以写 "24:00"）')
-
-        if end <= start:
-            raise ValueError("结束时刻必须晚于开始时刻")
-
-        try:
-            kind = Kind(str(p.get("kind", "CHORE")).upper())
-        except ValueError:
-            raise ValueError(f"时段性质无法识别：{p.get('kind')}") from None
-
-        nodes = None
-        raw_nodes = p.get("nodes")
-        if raw_nodes:
-            try:
-                a, b = int(raw_nodes[0]), int(raw_nodes[1])
-            except (TypeError, ValueError, IndexError):
-                raise ValueError("课表占位格必须写成一到十之间的两个节次") from None
-            if not (1 <= a <= slots.MAX_NODE and 1 <= b <= slots.MAX_NODE):
-                raise ValueError(f"节次必须在 1–{slots.MAX_NODE} 之间")
-            if a > b:
-                raise ValueError("起始节次不能比结束节次大")
-            nodes = (a, b)
-
-        return Block(start=start, end=end, title=title,
-                     note=str(p.get("note", "")).strip(), kind=kind, nodes=nodes)
-
-    # ============================================================
-    #  导入导出
-    # ============================================================
-
-    def import_from_file(self) -> dict[str, Any]:
-        """
-        选文件 → 解析 → 返回预览。
-
-        注意这里**只解析不套用** —— 真正的写入在 confirm_import 里。
-        导入是要覆盖用户数据的，必须先让他看见将要发生什么。
-        """
-        path = self._ask_open_file()
-        if not path:
-            return {"ok": False, "cancelled": True}
-
-        try:
-            text = Path(path).read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            try:
-                text = Path(path).read_text(encoding="gbk")
-            except (UnicodeDecodeError, OSError) as e:
-                return {"ok": False, "message": f"读不出文件内容：{e}"}
-        except OSError as e:
-            return {"ok": False, "message": f"打不开文件：{e}"}
-
-        try:
-            parsed = format_spec.parse(text, self.store.total_weeks)
-        except format_spec.FormatError as e:
-            return {"ok": False, "message": str(e)}
-
-        # ⚠️ 这里**只能**返回能被 JSON 序列化的东西。
-        #
-        # 曾经这里多带了一个 `"_parsed": parsed`（Parsed 是 dataclass 实例）。
-        # 后果是**导入功能完全不能用**：pywebview 会把 js_api 的返回值
-        # json.dumps 之后才发给前端（见 webview/util.py 里 _call 函数），
-        # 序列化失败会被它捕获成 `{isError: true}`，用户看到的是
-        # 「导入失败 TypeError: Object of type Parsed is not JSON serializable」。
-        #
-        # 这个键还是完全多余的：解析结果已经存在 self._pending_import 里
-        # （由 _preview_dict 顺手存下），前端不需要拿到它 —— 那正是
-        # _pending_import 存在的理由（见它的注释：别让前端来回搬数据）。
-        #
-        # **规矩：桥接方法的返回值必须能 json.dumps。** 传对象图过去是行不通的，
-        # 要么转成 dict，要么像这里一样根本别传。
-        # tests/test_api_serializable.py 把这条钉住了。
-        return {"ok": True, "preview": self._preview_dict(parsed)}
-
-    def confirm_import(self, mode: str) -> dict[str, Any]:
-        """套用上一次解析的结果。mode: 'replace' | 'merge'"""
-        parsed = self._pending_import
-        if parsed is None:
-            return {"ok": False, "message": "没有待导入的数据，请重新选择文件"}
-        self._pending_import = None
-
-        message = self.store.apply_import(parsed, mode)
-        self._notify_settings_changed()
-        return {"ok": True, "message": message}
-
-    def _preview_dict(self, parsed: format_spec.Parsed) -> dict[str, Any]:
-        self._pending_import = parsed
-
-        term = parsed.term
-        template_lines = []
-        if parsed.templates:
-            for t in DAY_TYPE_ORDER:
-                if t in parsed.templates:
-                    wake = engine.wake_minute(parsed.templates[t])
-                    template_lines.append({
-                        "key": t.value,
-                        "wake": slots.fmt(wake) if wake is not None else None,
-                    })
-
-        # 启用了哪些日型（v3）。标题里带上起床时间 —— 这是用户最想核对的
-        # 那一件事（「我说好 7 点起，到底给我排的几点」）。
-        day_type_lines = []
-        if parsed.day_types is not None:
-            for t in DAY_TYPE_ORDER:
-                if t in parsed.day_types.enabled:
-                    # 起床时间要从**这一份文件里的模板**推，没有就用内置的
-                    blocks = (parsed.templates or {}).get(t)
-                    if blocks is None:
-                        blocks = self.store.templates().get(t, [])
-                    wake = engine.wake_minute(blocks)
-                    day_type_lines.append({
-                        "key": t.value,
-                        "wake": slots.fmt(wake) if wake is not None else None,
-                    })
-
-        return {
-            "hasTerm": term is not None,
-            "termName": term.name if term else None,
-            "termStart": term.start_date.isoformat() if term else None,
-            "totalWeeks": term.total_weeks if term else None,
-            "courseCount": len(parsed.courses) if parsed.courses is not None else None,
-            "coursesUnchanged": parsed.courses is None,
-            "templateCount": len(parsed.templates) if parsed.templates else 0,
-            "templatesUnchanged": parsed.templates is None,
-            "templateLines": template_lines,
-            "dayTypesUnchanged": parsed.day_types is None,
-            "dayTypeEnabled": (
-                [
-                    {"key": t.value, "fallback": parsed.day_types.fallback is t}
-                    for t in DAY_TYPE_ORDER
-                    if t in parsed.day_types.enabled
-                ]
-                if parsed.day_types is not None
-                else []
-            ),
-            "dayTypeFallback": (
-                parsed.day_types.fallback.value
-                if parsed.day_types is not None
-                else None
-            ),
-            "dayTypeLines": day_type_lines,
-            "warnings": parsed.warnings,
-        }
-
-    def export_to_file(self, include_schedule_config: bool) -> dict[str, Any]:
-        """
-        ⚠️ 参数名跟着手机版从 `include_templates` 改成了 `include_schedule_config`。
-
-        它现在同时管**模板和日型策略**两样东西，还叫原名就是「名字在说谎」——
-        而一个名字和实际行为不符的参数，早晚会有人按名字去理解它。
-        （前端 app.js 里的调用点要同步改，否则会 TypeError。见
-        tests/test_api_contract.py：它扫前端所有 call('x') 的实参个数。）
-        """
-        text = self.store.export_json(bool(include_schedule_config))
-        default_name = "课表.json" if not include_schedule_config else "完整备份.json"
-        path = self._ask_save_file(default_name)
-        if not path:
-            return {"ok": False, "cancelled": True}
-        try:
-            Path(path).write_text(text, encoding="utf-8")
-        except OSError as e:
-            return {"ok": False, "message": f"写文件失败：{e}"}
-
-        count = len(self.store.courses())
-        extra = " + 作息配置（模板与启用日型）" if include_schedule_config else ""
-        return {"ok": True, "message": f"已导出 {count} 门课{extra}", "path": str(path)}
-
-    def copy_json(self, include_schedule_config: bool) -> dict[str, Any]:
-        text = self.store.export_json(bool(include_schedule_config))
-        return {"ok": True, "text": text, "message": f"已复制（{len(text)} 字）"}
-
-    def get_ai_prompt(self, kind: str) -> dict[str, Any]:
-        """
-        AI 提示词。
-
-        提示词里最要紧的三个值是学期名称、第 1 周周一日期、总周数 ——
-        它们决定整张表的时间对不对。让 AI 去猜的话它大概率会编一个，
-        而错一天的后果是每一周的课都错位。
-        所以这里从 Store 读出真实值填进去，用户复制到的天然是正确的。
-        """
-        if kind == "template":
-            text = AiPrompt.for_templates(self.store.term_name)
-        elif kind == "fix":
-            text = AiPrompt.for_fix(
-                "（把程序导入时弹出的报错原文粘在这里）",
-                "（把 AI 上次生成的 JSON 粘在这里）",
-            )
-        else:
-            text = AiPrompt.for_courses(
-                self.store.term_name,
-                self.store.term_start.isoformat(),
-                self.store.total_weeks,
-            )
-        return {"ok": True, "text": text}
 
     # ============================================================
     #  杂项
@@ -1031,6 +338,8 @@ class Api:
         folder.mkdir(parents=True, exist_ok=True)
         subprocess.Popen(["explorer", str(folder)])
         return {"ok": True, "message": str(folder)}
+
+
 
     def log_error(self, message: str) -> dict[str, Any]:
         """
@@ -1054,10 +363,14 @@ class Api:
             pass
         return {"ok": True}
 
+
+
     def quit_app(self) -> dict[str, Any]:
         if self._on_quit:
             self._on_quit()
         return {"ok": True}
+
+
 
     # ============================================================
     #  内部工具
@@ -1067,6 +380,8 @@ class Api:
         """设置变了 → 通知 main.py 重排定时器、开关悬浮窗"""
         if self._on_settings_changed:
             self._on_settings_changed()
+
+
 
     def _apply_setting(self, name: str, value: Any) -> dict[str, Any]:
         """
@@ -1079,6 +394,8 @@ class Api:
         setattr(self.store, name, value)
         self._notify_settings_changed()
         return self._settings_dict()
+
+
 
     def _courses_ok(self, message: str) -> dict[str, Any]:
         """
@@ -1094,6 +411,8 @@ class Api:
         self._notify_settings_changed()
         return {"ok": True, "message": message, "courses": self.get_courses()}
 
+
+
     def _templates_ok(self, message: str) -> dict[str, Any]:
         """
         作息模板改完之后的统一收尾。理由同 `_courses_ok`。
@@ -1103,29 +422,3 @@ class Api:
         """
         self._notify_settings_changed()
         return {"ok": True, "message": message, "templates": self.get_templates()}
-
-    def _ask_open_file(self) -> Optional[str]:
-        if self._window is None:
-            return None
-        import webview
-        result = self._window.create_file_dialog(
-            webview.OPEN_DIALOG,
-            allow_multiple=False,
-            file_types=("课表 JSON (*.json)", "所有文件 (*.*)"),
-        )
-        if not result:
-            return None
-        return result[0] if isinstance(result, (list, tuple)) else result
-
-    def _ask_save_file(self, default_name: str) -> Optional[str]:
-        if self._window is None:
-            return None
-        import webview
-        result = self._window.create_file_dialog(
-            webview.SAVE_DIALOG,
-            save_filename=default_name,
-            file_types=("JSON 文件 (*.json)",),
-        )
-        if not result:
-            return None
-        return result if isinstance(result, str) else result[0]
