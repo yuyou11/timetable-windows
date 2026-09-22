@@ -3,7 +3,7 @@
 
     python build.py           打包成**文件夹**（默认，推荐）
     python build.py --onefile 打包成单文件 exe
-    python build.py --console 带控制台的调试版（单文件）
+    python build.py --console 带控制台的调试版（加在上面任一种上，能看到报错）
 
 ## 为什么默认是文件夹版
 

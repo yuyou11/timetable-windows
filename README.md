@@ -5,7 +5,7 @@
 - **可执行文件**：`dist\时间规划表\时间规划表.exe`（文件夹版，**不需要装 Python**）
   —— exe 不能单独拿出来，必须和同目录的 `_internal` 一起
 - **界面**：HTML/CSS/JS（就是你正在学的那套）
-- **后端**：Python 3.14（只用到标准库 + pywebview）
+- **后端**：Python 3.14（标准库 + pywebview / pystray / Pillow，见 `requirements.txt`）
 - **数据位置**：`%APPDATA%\Timetable\data.json`
 
 ---
