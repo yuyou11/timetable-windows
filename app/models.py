@@ -50,6 +50,16 @@ class DayType(str, Enum):
     B_NORMAL = "B_NORMAL"      # 无早八的普通工作日
     SATURDAY = "SATURDAY"
     SUNDAY = "SUNDAY"
+    REST = "REST"              # 全天没课的休息日（假期 / 停课 / 课表没排到的那天）
+
+    # ⚠️ REST **故意不进** DAY_TYPE_ORDER。它不是用户可选的日型，
+    # 而是引擎从课表推导出来的状态 ——「那天没课」是客观事实，不是偏好。
+    # 不进 ORDER 的连锁效果全部是故意的：
+    #   · 文件里写不了它（_DAY_TYPE_NAMES 按 ORDER 构建，含 REST 的文件
+    #     在导入时报错，和手机版行为一致）
+    #   · 导出 / 本地存储永远不会带它（序列化按 ORDER 过滤）
+    #   · 设置页的日型勾选、作息编辑页的标签都不会出现它
+    # 它的模板内容来自 builtin_data（用户数据不需要、也不能定义它）。
 
 
 DAY_TYPE_LABEL = {
@@ -71,6 +81,9 @@ DAY_TYPE_LABEL = {
     DayType.B_NORMAL: "B 型日",
     DayType.SATURDAY: "周六",
     DayType.SUNDAY: "周日",
+    # REST 不在 DAY_TYPE_ORDER 里（理由见枚举上的注释），但显示文案要有 ——
+    # 今天页、悬浮窗的日型描述都会用到。
+    DayType.REST: "无课 · 休息日",
 }
 
 #: 六种日型的固定顺序。导出、界面展示都依赖它保持稳定

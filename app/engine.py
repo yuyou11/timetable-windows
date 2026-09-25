@@ -71,7 +71,12 @@ def monday_of(d: date) -> date:
 
 def natural_day_type(d: date, week: int, courses: Iterable[Course]) -> DayType:
     """
-    **日历上是哪种日** —— 判断依据只有一条：今天第 1-2 节有没有课。
+    **日历上是哪种日** —— 判断依据按顺序两条：
+
+      1. 工作日**全天没课** → REST（无课休息日）。程序不认识国庆中秋，
+         但「课表里这天一门课都没有」是数据里写得明明白白的客观事实 ——
+         假期、停课、课表没排到的周次都会落到这里，按休息日过（没有晚自修）。
+      2. 有课的工作日，再看**今天第 1-2 节有没有课**区分 A / B 型。
 
     这是整个设计里最值得注意的一处。文档里写死了「周一、周三 = A 型」，
     但如果照抄成 `if dow in (1, 3)`，那么第 8 周停课、国庆调课、中秋放假时，
@@ -90,7 +95,8 @@ def natural_day_type(d: date, week: int, courses: Iterable[Course]) -> DayType:
 
     **要测「日历规则」本身（比如「周二算不算训练日」）就调这个。**
 
-    （手机版里叫 naturalDayType，同一个东西。）
+    （手机版里叫 naturalDayType，同一个东西。REST 是电脑版先加的，
+    手机版跟进之前，同一份课表在手机上仍会把无课日按 B 型过。）
     """
     dow = d.isoweekday()          # 1=周一 … 7=周日
     if dow == 6:
@@ -98,11 +104,12 @@ def natural_day_type(d: date, week: int, courses: Iterable[Course]) -> DayType:
     if dow == 7:
         return DayType.SUNDAY
 
-    has_early_class = any(
-        c.enabled and c.day_of_week == dow and c.start_node <= 2 and week in c.weeks
-        for c in courses
-    )
-    if has_early_class:
+    today = [c for c in courses
+             if c.enabled and c.day_of_week == dow and week in c.weeks]
+    if not today:
+        return DayType.REST       # 全天没课 → 按休息日过
+
+    if any(c.start_node <= 2 for c in today):
         return DayType.A
 
     if dow == 2:
@@ -121,6 +128,13 @@ def day_type(
     """
     **实际要用的日型** —— 原始日历规则再经过 `policy` 映射。
 
+    ## REST 不参与映射
+
+    无课休息日在进入策略**之前**就拦下来了：「那天没课」是课表决定的
+    客观事实，不是用户可以配置的偏好。而且它不在任何 policy.enabled 里
+    （它不是可选日型）—— 不拦的话，`resolve()` 会把它映射成 fallback，
+    假期里又变回上学日，晚自修就回来了。
+
     ## ⚠️ `policy` 故意不给默认值
 
     如果给它一个默认值，那么调用方「忘了传策略」时不会有任何提示，
@@ -131,7 +145,10 @@ def day_type(
     Python 没有编译期的参数检查，这个报错就是我们的「编译器」。
     （手机版那边是 Kotlin 编译期报错，效果一样，理由写在 DayTypePolicy 的注释里。）
     """
-    return policy.resolve(natural_day_type(d, week, courses))
+    natural = natural_day_type(d, week, courses)
+    if natural is DayType.REST:
+        return DayType.REST
+    return policy.resolve(natural)
 
 
 def day_type_display(
@@ -159,7 +176,10 @@ def day_type_display(
     「用哪套模板」去问**策略**（day_type），两者拼起来才是完整的描述。
     """
     natural = natural_day_type(d, week, courses)
-    used = policy.resolve(natural)
+    # REST 的短路和 day_type() 里的是**同一条规则**，写两遍是因为这个函数
+    # 需要 natural（判有早八）和 used（出标签）两个答案，凑不到一次调用里。
+    # 改策略映射规则时，两处要一起动。
+    used = natural if natural is DayType.REST else policy.resolve(natural)
     label = DAY_TYPE_LABEL[used]
     return f"{label} · 有早八" if natural is DayType.A else label
 

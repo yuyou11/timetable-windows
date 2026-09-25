@@ -53,7 +53,8 @@ from app import builtin_data, engine, format_spec
 from app.models import DayType
 
 check("内置课表 19 门", lambda: _assert(len(builtin_data.courses()) == 19))
-check("内置模板 6 种", lambda: _assert(len(builtin_data.templates()) == 6))
+# 六套标准日型 + 电脑版特有的「无课休息日」REST
+check("内置模板 7 种（含 REST）", lambda: _assert(len(builtin_data.templates()) == 7))
 
 
 def check_templates_wake():

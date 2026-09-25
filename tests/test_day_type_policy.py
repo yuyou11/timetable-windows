@@ -1,4 +1,4 @@
-"""
+﻿"""
 日型策略的测试 —— 「这份配置实际用哪几种日型」。
 
 这是手机版 `DayTypePolicyTest.kt` 的 Python 对应版本，用例逐条对齐。
@@ -45,16 +45,25 @@ def d(day: int) -> date:
 
 
 class PolicyTestCase(unittest.TestCase):
-    """第 3 周的几天 —— 周一 9/21、周二 9/22、周四 9/24、周五 9/25、周六 9/26、周日 9/27"""
+    """
+    第 2 周的几天 —— 周一 9/14、周二 9/15、周四 9/17、周五 9/18、周六 9/19、周日 9/20。
+
+    ⚠️ 为什么是第 2 周：内置课表里只有这一周**周一到周五全都有课**
+    （第 3 周周五一门课都没有，第 1 周大部分日子无课）。
+    这一组的任务是测「有课的日子策略怎么映射」，夹具必须全是上学日；
+    无课的日子（REST）单独立一组测，见 TestRestDay。
+    """
+
+    WEEK = 2
 
     def setUp(self):
         self.courses = builtin_data.courses()
         self.templates = builtin_data.templates()
-        self.mon, self.tue, self.thu = d(21), d(22), d(24)
-        self.fri, self.sat, self.sun = d(25), d(26), d(27)
+        self.mon, self.tue, self.thu = d(14), d(15), d(17)
+        self.fri, self.sat, self.sun = d(18), d(19), d(20)
 
     def type_of(self, dt: date, policy: DayTypePolicy) -> DayType:
-        return engine.day_type(dt, 3, self.courses, policy)
+        return engine.day_type(dt, self.WEEK, self.courses, policy)
 
     def wake_of(self, dt: date, policy: DayTypePolicy):
         """这一天几点起（从它用的那套模板推出来）"""
@@ -62,7 +71,7 @@ class PolicyTestCase(unittest.TestCase):
         return engine.wake_minute(self.templates[t])
 
     def moments_of(self, dt: date, policy: DayTypePolicy):
-        return engine.moments(dt, 3, self.courses, self.templates, policy)
+        return engine.moments(dt, self.WEEK, self.courses, self.templates, policy)
 
 
 # ============================================================
@@ -77,18 +86,18 @@ class TestNaturalRuleUntouched(PolicyTestCase):
         这条保证了「想让训练日生效」时，引擎还拿得出那个答案 ——
         如果这里直接把训练日那两行删掉，就再也没有回旋余地了。
         """
-        self.assertEqual(DayType.A, engine.natural_day_type(self.mon, 3, self.courses))
-        self.assertEqual(DayType.B_TRAIN_A, engine.natural_day_type(self.tue, 3, self.courses))
-        self.assertEqual(DayType.B_TRAIN_B, engine.natural_day_type(self.thu, 3, self.courses))
-        self.assertEqual(DayType.B_NORMAL, engine.natural_day_type(self.fri, 3, self.courses))
-        self.assertEqual(DayType.SATURDAY, engine.natural_day_type(self.sat, 3, self.courses))
-        self.assertEqual(DayType.SUNDAY, engine.natural_day_type(self.sun, 3, self.courses))
+        self.assertEqual(DayType.A, engine.natural_day_type(self.mon, self.WEEK, self.courses))
+        self.assertEqual(DayType.B_TRAIN_A, engine.natural_day_type(self.tue, self.WEEK, self.courses))
+        self.assertEqual(DayType.B_TRAIN_B, engine.natural_day_type(self.thu, self.WEEK, self.courses))
+        self.assertEqual(DayType.B_NORMAL, engine.natural_day_type(self.fri, self.WEEK, self.courses))
+        self.assertEqual(DayType.SATURDAY, engine.natural_day_type(self.sat, self.WEEK, self.courses))
+        self.assertEqual(DayType.SUNDAY, engine.natural_day_type(self.sun, self.WEEK, self.courses))
 
     def test_all_policy_is_identity(self):
         """ALL 策略不该改变任何日型"""
         for dt in (self.mon, self.tue, self.thu, self.fri, self.sat, self.sun):
             self.assertEqual(
-                engine.natural_day_type(dt, 3, self.courses),
+                engine.natural_day_type(dt, self.WEEK, self.courses),
                 self.type_of(dt, DayTypePolicy.ALL),
                 f"{dt} 在 ALL 策略下被改动了",
             )
@@ -204,7 +213,7 @@ class TestCustomPolicy(PolicyTestCase):
 
 class TestDayTypeDisplay(PolicyTestCase):
     def test_default_policy_says_has_early_class_on_monday(self):
-        label = engine.day_type_display(self.mon, 3, self.courses, DayTypePolicy.DEFAULT)
+        label = engine.day_type_display(self.mon, self.WEEK, self.courses, DayTypePolicy.DEFAULT)
         self.assertIn("有早八", label)
 
     def test_label_does_not_lie_under_custom_policy(self):
@@ -220,7 +229,7 @@ class TestDayTypeDisplay(PolicyTestCase):
             enabled=frozenset({DayType.A, DayType.SATURDAY, DayType.SUNDAY}),
             fallback=DayType.A,
         )
-        label = engine.day_type_display(self.tue, 3, self.courses, p)
+        label = engine.day_type_display(self.tue, self.WEEK, self.courses, p)
 
         # 用的是 A 型模板
         self.assertIn("A 型日", label)
@@ -229,13 +238,64 @@ class TestDayTypeDisplay(PolicyTestCase):
                          f"周二没有早八，却显示成「{label}」—— 那是假话")
 
     def test_weekend_label(self):
-        label = engine.day_type_display(self.sat, 3, self.courses, DayTypePolicy.DEFAULT)
+        label = engine.day_type_display(self.sat, self.WEEK, self.courses, DayTypePolicy.DEFAULT)
         self.assertNotIn("有早八", label)
         self.assertIn("周六", label)
 
 
 # ============================================================
-#  五、JSON 解析
+#  五、无课休息日（REST）—— 电脑版新规则
+# ============================================================
+
+class TestRestDay(unittest.TestCase):
+    """
+    全天没课的工作日 → REST，按休息日过（没有晚自修）。
+
+    这是判「假期」的唯一手段：程序不认识国庆中秋，但「课表里这天
+    一门课都没有」是数据里的客观事实。内置课表第 3 周的周五正好
+    一门课都没有（思德/高数/体育都是 2、5-16 周），就拿它当夹具。
+    """
+
+    def setUp(self):
+        self.courses = builtin_data.courses()
+        self.templates = builtin_data.templates()
+        self.fri = date(2026, 9, 25)     # 第 3 周周五：内置课表全天无课
+
+    def test_natural_rule_says_rest(self):
+        self.assertEqual(DayType.REST, engine.natural_day_type(self.fri, 3, self.courses))
+
+    def test_rest_survives_every_policy(self):
+        """
+        ★ REST 必须在进入策略**之前**被拦下。
+
+        它不在任何 policy.enabled 里（不是可选日型）——
+        不拦的话 resolve() 会把它映射成 fallback，假期又变回上学日，
+        晚自修就跟着回来了。
+        """
+        for policy in (DayTypePolicy.DEFAULT, DayTypePolicy.ALL):
+            self.assertEqual(
+                DayType.REST, engine.day_type(self.fri, 3, self.courses, policy),
+                f"{policy} 策略把无课日映射走了",
+            )
+
+    def test_rest_day_timeline_has_no_evening_study(self):
+        moments = engine.moments(self.fri, 3, self.courses, self.templates,
+                                 DayTypePolicy.DEFAULT)
+        self.assertEqual(9 * 60, moments[0].end, "无课日睡到 09:00 自然醒")
+        titles = [m.title for m in moments]
+        self.assertFalse(
+            [t for t in titles if "晚自修" in t or "晚自习" in t],
+            f"无课日不该出现晚自修，实际时间轴：{titles}",
+        )
+        self.assertFalse([m for m in moments if m.is_course], "无课日不该有课程格子")
+
+    def test_rest_day_label(self):
+        label = engine.day_type_display(self.fri, 3, self.courses, DayTypePolicy.DEFAULT)
+        self.assertEqual("无课 · 休息日", label)
+
+
+# ============================================================
+#  六、JSON 解析
 # ============================================================
 
 class TestParseDayTypes(unittest.TestCase):
@@ -544,12 +604,12 @@ class TestDayTypeApi(DayTypeApiTestCase):
         现在改成：**先量一次、改、再量一次，断言两次不同**。
         这样只有「策略真的穿透到时间轴」才可能通过。
         """
-        fri = date(2026, 9, 25)          # 第 3 周周五，没早八
+        fri = date(2026, 9, 11)          # 第 2 周周五，有课但没早八
 
         def friday_wake():
             """周五实际几点起 —— 走完整的「取模板 → 推起床时间」链路"""
             templates, policy = self.store.template_set()
-            used = engine.day_type(fri, 3, self.store.courses(), policy)
+            used = engine.day_type(fri, 2, self.store.courses(), policy)
             return used, engine.wake_minute(templates[used])
 
         # ---- 改之前：默认策略把周五算成 B_NORMAL，07:25 起 ----

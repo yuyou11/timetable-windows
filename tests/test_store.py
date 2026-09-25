@@ -442,7 +442,8 @@ class TestRoundTrip(StoreTestCase):
         self.store.save_templates(custom)
 
         merged = self.reopen().templates()
-        self.assertEqual(6, len(merged), "六种日型都要在（没覆盖的来自内置）")
+        # 六套标准日型 + REST（无课休息日，来自内置，永远不写进存储）
+        self.assertEqual(7, len(merged), "所有日型都要在（没覆盖的来自内置）")
         self.assertEqual(9 * 60, merged[DayType.SATURDAY][0].end)
         self.assertEqual(_blocks(BS.templates()[DayType.A]), _blocks(merged[DayType.A]))
 
@@ -813,7 +814,8 @@ class TestTemplatesPersistence(StoreTestCase):
         self.store.save_templates(self.CUSTOM_A)
         merged = self.reopen().templates()
 
-        self.assertEqual(6, len(merged), "六种日型都必须可用")
+        # 六套标准日型 + REST（无课休息日，来自内置）
+        self.assertEqual(7, len(merged), "所有日型都必须可用")
         self.assertEqual(7 * 60, merged[DayType.A][0].end, "A 型该用自定义的")
         self.assertEqual(
             _blocks(BS.templates()[DayType.B_NORMAL]),
@@ -824,7 +826,8 @@ class TestTemplatesPersistence(StoreTestCase):
     def test_no_custom_templates_by_default(self):
         self.assertEqual({}, self.store.custom_templates())
         self.assertFalse(self.store.has_custom_templates)
-        self.assertEqual(6, len(self.store.templates()))
+        # 六套标准日型 + REST（无课休息日，电脑版特有，见 builtin_data）
+        self.assertEqual(7, len(self.store.templates()))
 
     def test_reset_templates_removes_the_key(self):
         self.store.save_templates(self.CUSTOM_A)
@@ -966,7 +969,8 @@ class TestCorruptDataFile(StoreTestCase):
         s = self.reopen()
         self.assertEqual({}, s.custom_templates())
         self.assertFalse(s.has_custom_templates)
-        self.assertEqual(6, len(s.templates()), "坏模板要回落到内置六套")
+        # 坏模板回落到内置：六套标准日型 + REST（无课休息日）
+        self.assertEqual(7, len(s.templates()), "坏模板要回落到内置模板全套")
         self.assertEqual(1, len(s.courses()), "课表不该受模板损坏影响")
 
     def test_json_null_is_not_treated_as_missing(self):

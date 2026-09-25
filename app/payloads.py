@@ -121,4 +121,5 @@ def _short_day_type(t: DayType) -> str:
         DayType.B_NORMAL: "无早八",
         DayType.SATURDAY: "周六",
         DayType.SUNDAY: "周日",
+        DayType.REST: "无课",
     }[t]

@@ -113,17 +113,25 @@ class TestDayType(unittest.TestCase):
             DayType.A, engine.natural_day_type(d(2026, 9, 21), 3, self.courses)   # 第 3 周周一有英语
         )
 
-    def test_monday_before_courses_start_is_b(self):
-        # 第 1 周大学英语还没开（它是 2-4、6-17 周）→ 没有早八
-        # 如果写死成「周一 = A 型」，开学前一周就会误报 06:55 起床
+    def test_monday_before_courses_start_is_rest(self):
+        # 第 1 周大学英语还没开（它是 2-4、6-17 周）→ 全天没课
+        # 无课日按休息日过（REST），而不是按 B 型把人按 07:25 的节奏排满
         self.assertEqual(
-            DayType.B_NORMAL, engine.natural_day_type(d(2026, 9, 7), 1, self.courses)
+            DayType.REST, engine.natural_day_type(d(2026, 9, 7), 1, self.courses)
         )
 
-    def test_week8_wednesday_falls_back_to_b(self):
-        # 高数周三 1-2 节是「2-7、9-17 周」，第 8 周正好不上
+    def test_friday_no_early_class_is_b(self):
+        # 第 2 周周五有课（体育、思德等），但没有早八 → B 型
+        # 这条和上面那条合起来才是完整规则：有课没早八 = B 型，没课 = REST
         self.assertEqual(
-            DayType.B_NORMAL, engine.natural_day_type(d(2026, 10, 28), 8, self.courses)
+            DayType.B_NORMAL, engine.natural_day_type(d(2026, 9, 11), 2, self.courses)
+        )
+
+    def test_week8_wednesday_no_courses_is_rest(self):
+        # 高数周三 1-2 节是「2-7、9-17 周」，第 8 周正好不上；
+        # 周三其它的课也都排不到第 8 周 → 全天没课 → 休息日
+        self.assertEqual(
+            DayType.REST, engine.natural_day_type(d(2026, 10, 28), 8, self.courses)
         )
 
     def test_training_days(self):
@@ -143,6 +151,8 @@ class TestWakeMinute(unittest.TestCase):
         self.assertEqual(7 * 60 + 25, engine.wake_minute(t[DayType.B_TRAIN_A]))
         self.assertEqual(9 * 60, engine.wake_minute(t[DayType.SATURDAY]))
         self.assertEqual(8 * 60 + 30, engine.wake_minute(t[DayType.SUNDAY]))
+        # 无课休息日睡到自然醒 —— 和周六一个点
+        self.assertEqual(9 * 60, engine.wake_minute(t[DayType.REST]))
 
     def test_all_types_have_a_morning_wake_time(self):
         # 防回归：将来有人改了模板里某个 kind，导致找不到上午睡眠段，
@@ -197,7 +207,10 @@ class TestTimeline(unittest.TestCase):
         self.assertEqual(slots.end(2), m.end)       # 10:05，中间那 5 分钟算在里面
 
     def test_empty_slot_says_no_class(self):
-        m = self.at(d(2026, 9, 7), 1, "16:00")
+        # 周一第 6 周有课（英语/高数/军理），但 5-6 节的近现代史要 15 周才开始
+        # —— 这个格子空着，应显示「无课」。
+        # ⚠️ 别用第 1 周周一：那天全天无课，整个走 REST 休息日，没有占位格。
+        m = self.at(d(2026, 10, 12), 6, "15:00")
         self.assertIn("无课", m.title)
 
     def test_course_only_in_week_4(self):
@@ -215,8 +228,9 @@ class TestTimeline(unittest.TestCase):
         self.assertEqual("程序设计基础", self.at(d(2026, 9, 17), 2, "16:00").title)
         # 第 3 周（单周）起是数据结构
         self.assertEqual("数据结构", self.at(d(2026, 9, 24), 3, "16:00").title)
-        # 第 4 周是双周，数据结构不上
-        self.assertIn("无课", self.at(d(2026, 10, 1), 4, "16:00").title)
+        # 第 6 周是双周，数据结构不上（大物有课，所以这天不是 REST，
+        # 7-8 节这个格子显示「无课」）
+        self.assertIn("无课", self.at(d(2026, 10, 15), 6, "16:00").title)
 
     def test_tuesday_evening_is_training(self):
         """
@@ -584,8 +598,11 @@ class TestRoundTrip(unittest.TestCase):
         text = format_spec.serialize("测试", TERM_START, 19, builtin_data.courses(), templates)
         back = format_spec.parse(text).templates
 
-        self.assertEqual(len(templates), len(back))
-        for day_type in DayType:
+        # REST 故意不进文件（不在 DAY_TYPE_ORDER 里，理由见 models 的注释），
+        # 往返后剩下的是六套标准日型；REST 的模板永远来自内置，不依赖往返。
+        self.assertNotIn(DayType.REST, back)
+        self.assertEqual(6, len(back))
+        for day_type in back:
             self.assertEqual(
                 _sig_blocks(templates[day_type]),
                 _sig_blocks(back[day_type]),
@@ -601,6 +618,9 @@ class TestRoundTrip(unittest.TestCase):
         templates = builtin_data.templates()
         text = format_spec.serialize("测试", TERM_START, 19, builtin_data.courses(), templates)
         back = format_spec.parse(text).templates
+        # REST 不进文件（见 test_builtin_templates_survive_roundtrip），
+        # 从内置补回 —— 生产环境里 store.templates() 也是这么合并的。
+        back[DayType.REST] = templates[DayType.REST]
 
         courses = builtin_data.courses()
         for week, dow in [(3, 0), (3, 1), (3, 2), (3, 3), (3, 4), (8, 2), (1, 0)]:
@@ -716,8 +736,11 @@ class TestTemplatePersistence(unittest.TestCase):
         original = builtin_data.templates()
         back = format_spec.templates_from_json(format_spec.templates_to_json(original))
 
-        self.assertEqual(len(original), len(back))
-        for day_type in DayType:
+        # REST 存不进去是**故意的**（它不在 DAY_TYPE_ORDER 里，见 models）——
+        # 本地存储和文件一样只装六套标准日型，REST 永远从内置来。
+        self.assertNotIn(DayType.REST, back)
+        self.assertEqual(6, len(back))
+        for day_type in back:
             self.assertEqual(
                 _sig_blocks(original[day_type]),
                 _sig_blocks(back[day_type]),

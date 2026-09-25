@@ -840,4 +840,27 @@ def templates() -> dict[DayType, list[Block]]:
     """构造内置模板。延迟到调用时才解析，避免 import 时就依赖 format_spec"""
     from .format_spec import _parse_templates
     raw = json.loads(TEMPLATES_JSON)
-    return _parse_templates(raw, [])
+    merged = _parse_templates(raw, [])
+    merged[DayType.REST] = _REST_DAY_TEMPLATE
+    return merged
+
+
+# 「无课休息日」模板 —— **电脑版特有**，不是从手机版导出的。
+#
+# 引擎把「全天没课的工作日」判为 REST（假期、停课、课表没排到的日子），
+# 那天按这一套过：没有课程格子、没有晚自修，全是自由块。
+# REST 不在 DAY_TYPE_ORDER 里（不能出现在 JSON 文件中），所以这套模板
+# 只能在代码里构造，走不了 TEMPLATES_JSON。
+_REST_DAY_TEMPLATE = [
+    Block(0, 9 * 60, '睡觉', kind=Kind.SLEEP),
+    Block(9 * 60, 9 * 60 + 30, '起床、洗漱'),
+    Block(9 * 60 + 30, 10 * 60 + 15, '早餐', kind=Kind.MEAL),
+    Block(10 * 60 + 15, 12 * 60, '★ 自由块', note='没课的日子，做点自己想做的事', kind=Kind.FREE),
+    Block(12 * 60, 12 * 60 + 40, '午餐', kind=Kind.MEAL),
+    Block(12 * 60 + 40, 13 * 60 + 40, '午休', note='闭眼躺一会儿，不用睡着', kind=Kind.SLEEP),
+    Block(13 * 60 + 40, 17 * 60 + 30, '★ 自由块', note='整块时间，别切成碎片', kind=Kind.FREE),
+    Block(17 * 60 + 30, 18 * 60 + 30, '晚餐 + 散步', kind=Kind.MEAL),
+    Block(18 * 60 + 30, 22 * 60 + 30, '★ 自由块', note='晚上没有晚自修，放松、收尾都行', kind=Kind.FREE),
+    Block(22 * 60 + 30, 23 * 60 + 30, '洗漱、聊天、睡前刷手机'),
+    Block(23 * 60 + 30, 24 * 60, '睡觉', note='没有闹钟的一天也别熬太晚', kind=Kind.SLEEP),
+]

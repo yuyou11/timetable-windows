@@ -27,7 +27,7 @@
 ;  ============================================================================
 
 #define AppName "时间规划表"
-#define AppVersion "2.0"
+#define AppVersion "2.1"
 #define AppExeName "时间规划表.exe"
 
 ; AppId 是**这个程序的唯一身份**，升级时要保持不变。
@@ -69,7 +69,7 @@ CloseApplications=yes
 RestartApplications=no
 AllowNoIcons=yes
 ; exe 文件属性里显示的信息
-VersionInfoVersion=2.0.0.0
+VersionInfoVersion=2.1.0.0
 VersionInfoDescription={#AppName} 安装程序
 VersionInfoProductName={#AppName}
 VersionInfoProductVersion={#AppVersion}

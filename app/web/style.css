@@ -175,6 +175,7 @@ body {
   background: var(--surface-2);
   border: 1px solid var(--border);
   color: var(--text-faint);
+  font: inherit;               /* button 不自动继承字体，这里统一接管 */
   font-size: 11.5px;
 }
 
@@ -183,6 +184,15 @@ body {
   border-color: transparent;
   color: var(--accent-text);
 }
+
+/* #statusPill 是 <button> —— 它本身就是悬浮窗的开关，点一下切换
+   （绑定见 app.js 的 bindEvents）。手型和 hover 描边提示「可以按」；
+   hover 优先级压过 .pill.on 的透明描边，开/关两态都有反馈。 */
+button.pill {
+  cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+button.pill:hover { border-color: var(--accent); }
 
 /* ============================ 内容区 ============================ */
 

@@ -102,16 +102,16 @@ function updateDayTypeHint() {
   }
 }
 
+/**
+ * 左下角的状态胶囊。它同时是悬浮窗的开关（点击切换，绑定见 app.js 的
+ * bindEvents），所以文案只说悬浮窗这一件事：以前「关了悬浮窗、只开提醒」
+ * 时会显示「提醒已开启」，但按下去变化的是悬浮窗 —— 文案和按钮做的事
+ * 对不上，会让人觉得「我按了它，怎么开关的是悬浮窗」。
+ */
 function updateStatusPill(s) {
   const pill = $('statusPill');
-  if (!s.enabled && !s.ballEnabled) {
-    pill.textContent = '已关闭';
-    pill.className = 'pill';
-  } else if (s.ballEnabled) {
-    pill.textContent = '悬浮窗运行中';
-    pill.className = 'pill on';
-  } else {
-    pill.textContent = '提醒已开启';
-    pill.className = 'pill on';
-  }
+  const on = !!s.ballEnabled;
+  pill.textContent = on ? '悬浮窗运行中' : '悬浮窗已关闭';
+  pill.className = on ? 'pill on' : 'pill';
+  pill.title = on ? '点击关闭桌面悬浮窗' : '点击开启桌面悬浮窗';
 }

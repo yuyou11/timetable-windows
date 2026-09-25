@@ -58,7 +58,8 @@
   </nav>
 
   <div class="sidebar-foot">
-    <div class="pill" id="statusPill">未开启</div>
+    <!-- 不只是状态显示 —— 它本身就是悬浮窗的开关，点一下切换（见 app.js）。 -->
+    <button class="pill" id="statusPill" type="button" title="点击开启桌面悬浮窗">加载中…</button>
   </div>
 </aside>
 
@@ -313,7 +314,10 @@
     <div class="card">
       <h2>关于</h2>
       <p class="sub">
-        时间规划表 · 电脑版 v1.0<br>
+        <!-- 版本号别写死在这里 —— 它由 app.js 的 boot() 从后端填进来
+             （唯一来源是 app/__init__.py）。写死已经漂移过一次：
+             程序到 2.0 的时候这里还是 v1.0。 -->
+        <span id="aboutVersion">时间规划表 · 电脑版</span><br>
         数据格式 timetable v3 —— 与手机版通用<br>
         所有数据存在本机，不联网、不上传
       </p>

@@ -69,6 +69,23 @@ function switchPage(name) {
   if (name === 'settings') renderSettings();
 }
 // ==========================================================================
+//  悬浮窗开关
+// ==========================================================================
+
+/**
+ * 悬浮窗开关的统一入口。设置页的 swBall 和左下角的状态胶囊（statusPill）
+ * 是**同一个设置的两个入口**，所以收尾时两个控件都要同步到最新状态 ——
+ * 只同步自己那一个的话，另一个就会停在旧状态，而且不会有任何报错。
+ */
+async function setBall(next) {
+  const r = await call('set_ball_enabled', next);
+  STATE.settings = r;
+  $('swBall').checked = r.ballEnabled;
+  updateStatusPill(r);
+  toast(r.ballEnabled ? '悬浮窗已开启' : '悬浮窗已关闭');
+}
+
+// ==========================================================================
 //  事件绑定
 // ==========================================================================
 
@@ -140,11 +157,12 @@ function bindEvents() {
   $('copyPromptFix').onclick = () => showPrompt('fix', '报错修复提示词');
 
   // 设置
-  $('swBall').onchange = async (e) => {
-    const r = await call('set_ball_enabled', e.target.checked);
-    STATE.settings = r;
-    updateStatusPill(r);
-    toast(e.target.checked ? '悬浮窗已开启' : '悬浮窗已关闭');
+  $('swBall').onchange = (e) => setBall(e.target.checked);
+
+  // 左下角的状态胶囊本身就是开关：点一下切换，不用专门跑到设置页去找。
+  // bootstrap 还没回来时没有可依据的状态，点了先忽略。
+  $('statusPill').onclick = () => {
+    if (STATE.settings) setBall(!STATE.settings.ballEnabled);
   };
 
   document.querySelectorAll('[data-lead]').forEach((btn) => {
@@ -214,6 +232,9 @@ async function refreshAll() {
   const t = await call('bootstrap');
   STATE.term = t.term;
   STATE.settings = t.settings;
+  // 悬浮窗在自己窗口上被关掉时，后端会推 refreshAll 过来 ——
+  // 设置页的开关要是不同步，它就停在旧状态。
+  $('swBall').checked = t.settings.ballEnabled;
   updateStatusPill(t.settings);
 }
 
@@ -239,6 +260,9 @@ async function boot() {
   if (window.__applyTheme) window.__applyTheme(data.settings.theme);
 
   $('brandSub').textContent = `第 ${data.term.todayWeek} 周`;
+  // 「关于」页的版本号也在这里填 —— 唯一来源是后端（app/__init__.py），
+  // 别再写死进 HTML：写死的话改版本号就多一处会漏的地方。
+  $('aboutVersion').textContent = `时间规划表 · 电脑版 v${data.version}`;
   updateStatusPill(data.settings);
 
   bindEvents();
