@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 from typing import Any, Optional
@@ -102,6 +103,25 @@ class Store:
         #: 用 RLock 而不是 Lock，是因为有的路径会在持锁时再调一次 save。
         self._lock = threading.RLock()
 
+        #: 解析结果缓存的**版本号**。load() / save() 都会 +1：
+        #: 这两个方法覆盖了 `_data` 的全部变更入口 —— 每个 setter 改完都会
+        #: 走 save()，提醒线程拿别的进程的改动走 load()。
+        #: 只要有一条改 `_data` 的路不经过这两个方法，缓存就会发霉，
+        #: 所以 test_store.py 里有用例盯着「改完能立刻读到」。
+        self._version = 0
+
+        #: courses() / templates() 的解析结果缓存，(版本号, 结果) 二元组。
+        #: None = 还没缓存过。为什么缓存：
+        #: 每次读都要把 JSON dict 重建为 Course 对象、把模板 JSON 解析一遍
+        #: 再跟内置模板合并 —— 而 `ball_state` 每分钟至少走一遍全流程，
+        #: `get_week` 一次翻 7 天要读好几次。数据量小所以从来不是瓶颈，
+        #: 但这是纯浪费，一个版本号就能省掉。
+        self._courses_cache: Optional[tuple[int, list]] = None
+        self._templates_cache: Optional[tuple[int, dict]] = None
+
+        #: batch() 的嵌套深度。> 0 时 save() 暂存，退出最外层 batch 时统一落盘。
+        self._batch_depth = 0
+
         self.load()
 
     # ---------------- 读写 ----------------
@@ -120,6 +140,11 @@ class Store:
                     self._data = {}
             else:
                 self._data = {}
+            # 文件换了，旧缓存全部作废（版本号 +1 已经足够让比对失败，
+            # 这里顺手置 None 是把旧对象也放掉，别攥着几 KB 不撒手）
+            self._version += 1
+            self._courses_cache = None
+            self._templates_cache = None
 
     def _backup_broken_file(self) -> None:
         try:
@@ -129,6 +154,11 @@ class Store:
             pass
 
     def save(self) -> None:
+        # batch() 里的改动先攒着，退出最外层 batch 时统一写一次。
+        # 「攒着」没有任何丢失风险：_data 是内存对象，setter 们改的都是它，
+        # batch 退出时的那一次 save 落盘的是最终状态。
+        if self._batch_depth > 0:
+            return
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             # 先写临时文件再替换：这样即使写到一半断电，也不会毁掉原文件。
@@ -143,6 +173,45 @@ class Store:
                 encoding="utf-8",
             )
             tmp.replace(self.path)
+            self._version += 1
+            self._courses_cache = None
+            self._templates_cache = None
+
+    @contextmanager
+    def batch(self):
+        """
+        把多次改动合并成**一次落盘**。
+
+        ## 为什么需要它
+
+        有几个操作天然要连改几个设置：选一张背景图要同时写
+        bg_image / bg_dim / text_color 三个键，导入一份文件要写
+        学期 + 模板 + 日型 + 课表。每个 setter 改完都会各自 save() 一次 ——
+        数据量小所以并不慢，但一次操作触发 N 次全量写盘纯属浪费，
+        中途断电还可能留下「改了一半」的状态。
+
+        ## 用法与语义
+
+            with store.batch():
+                store.bg_image = True
+                store.bg_dim = 40
+            # ← 这里才真正写盘
+
+        · 批内每个 setter 的 save() 都变成 no-op，退出**最外层** batch
+          时统一落盘一次（嵌套安全：内层退出不写，攒给外层）。
+        · 批中途抛异常则**不落盘**（try/finally 只负责减计数，
+          写盘语句在 try 块之外，异常会跳过它）—— 要么全改、要么不改，
+          和「每个 setter 各自原子」的旧语义是同一个方向。
+        · 缓存不受影响：真正的落盘发生在 batch 退出后，
+          版本号在那次 save() 里正常递增。
+        """
+        self._batch_depth += 1
+        try:
+            yield
+        finally:
+            self._batch_depth -= 1
+        if self._batch_depth == 0:
+            self.save()
 
     # ---------------- 首次启动 ----------------
 
@@ -467,6 +536,16 @@ class Store:
     # ---------------- 课程 ----------------
 
     def courses(self) -> list[Course]:
+        # 命中缓存也**必须拷一份列表再还出去**：调用方会原地改返回值 ——
+        # api_courses 的 save_course / delete_course / toggle_course 全是
+        # 「courses = store.courses() → 改第 index 个 → save_courses」的写法。
+        # 把缓存对象直接递出去，第一次改写就会污染缓存，
+        # 之后读到的永远是改过的。Course 对象本身没人原地改（都是整颗换掉），
+        # 浅拷列表就够了。
+        cached = self._courses_cache
+        if cached is not None and cached[0] == self._version:
+            return list(cached[1])
+
         raw = self._data.get("courses")
         if raw is None:
             # 第一次运行：把内置课表写进去，之后就以存储里的为准。
@@ -474,8 +553,12 @@ class Store:
             # clear_courses() 会写入 "[]"，那就不会再走到这里。
             items = builtin_data.courses()
             self.save_courses(items)
-            return items
-        return [_course_from_dict(x, i) for i, x in enumerate(raw)]
+        else:
+            items = [_course_from_dict(x, i) for i, x in enumerate(raw)]
+        # save_courses 内部会 save()（版本号 +1），所以缓存在**写盘之后**标记，
+        # 用的才是当前版本号。顺序反了的话下一次读会白白重建一遍。
+        self._courses_cache = (self._version, items)
+        return list(items)
 
     def save_courses(self, items: list[Course]) -> None:
         self._data["courses"] = [_course_to_dict(c) for c in items]
@@ -510,12 +593,26 @@ class Store:
         存的是**用户改过的那部分**，不是展开后的完整六套。
         好处有两个：省空间；将来内置模板更新了，用户没覆盖过的那几种
         会自动跟着更新，而不是被旧数据钉死。
+
+        ## 缓存与防御性拷贝
+
+        解析模板 JSON + 合并内置六套是读取路径上最贵的一步，按版本号缓存。
+        和 courses() 同一个道理，**还出去的必须是拷贝**：
+        api_templates 的 shift_wake_time 会
+        「full = store.templates() → 替换其中一个键 → save_templates(full)」，
+        直接递缓存对象出去，第一次替换就把缓存污染了。
+        外层换新 dict、内层换新 list，两层都断开引用。
         """
+        cached = self._templates_cache
+        if cached is not None and cached[0] == self._version:
+            return {k: list(v) for k, v in cached[1].items()}
+
         raw = self._data.get("templates", "")
         custom = format_spec.templates_from_json(raw, self.node_count) if raw else {}
         merged = builtin_data.templates()
         merged.update(custom)          # 用户改过的覆盖内置
-        return merged
+        self._templates_cache = (self._version, merged)
+        return {k: list(v) for k, v in merged.items()}
 
     def custom_templates(self) -> dict[DayType, list[Block]]:
         """只看用户自定义的部分（用于界面提示和导出判断）"""
@@ -635,7 +732,18 @@ class Store:
         这条规则贯穿整个导入流程，是防止一次误操作毁掉用户数据的关键。
 
         返回一句给用户看的结果描述。
+
+        ## batch 包住整个套用过程
+
+        里面的 save_courses（课表分支）和各设置写入原本各落一次盘，
+        一个 batch 收成一次 —— 导入是所有写路径里改键最多的，
+        也最值得收。中途任何一步抛异常则整体不落盘（batch 的语义，
+        见那边说明），不会留下「学期改了、课表没进」的半套状态。
         """
+        with self.batch():
+            return self._apply_import_locked(parsed, mode)
+
+    def _apply_import_locked(self, parsed: format_spec.Parsed, mode: str) -> str:
         if parsed.term is not None:
             self._data["term_name"] = parsed.term.name
             self._data["term_start"] = parsed.term.start_date.isoformat()
@@ -683,7 +791,7 @@ class Store:
         if parsed.periods is not None and parsed.periods != format_spec.DEFAULT_PERIODS:
             parts.append(f"节次结构已改为 {parsed.periods}")
 
-        self.save()
+        # 不用自己 save：batch 退出时统一落盘（见 _apply_import 的说明）
         return "，".join(parts)
 
 

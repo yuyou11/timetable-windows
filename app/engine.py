@@ -119,6 +119,26 @@ def natural_day_type(d: date, week: int, courses: Iterable[Course]) -> DayType:
     return DayType.B_NORMAL
 
 
+def _used_type(natural: DayType, policy: DayTypePolicy) -> DayType:
+    """
+    REST 短路 + 策略映射 —— 「日历日型 → 实际日型」的共用最后一步。
+
+    原来这段在 day_type() 和 day_type_display() 里各写一遍，注释也承认
+    「改策略映射规则时，两处要一起动」。抽出来之后这条规矩就不用人守了：
+    只有这一个地方定义「REST 不参与映射」。
+
+    ## REST 不参与映射
+
+    无课休息日在进入策略**之前**就拦下来了：「那天没课」是课表决定的
+    客观事实，不是用户可以配置的偏好。而且它不在任何 policy.enabled 里
+    （它不是可选日型）—— 不拦的话，`resolve()` 会把它映射成 fallback，
+    假期里又变回上学日，晚自修就回来了。
+    """
+    if natural is DayType.REST:
+        return DayType.REST
+    return policy.resolve(natural)
+
+
 def day_type(
     d: date,
     week: int,
@@ -127,13 +147,6 @@ def day_type(
 ) -> DayType:
     """
     **实际要用的日型** —— 原始日历规则再经过 `policy` 映射。
-
-    ## REST 不参与映射
-
-    无课休息日在进入策略**之前**就拦下来了：「那天没课」是课表决定的
-    客观事实，不是用户可以配置的偏好。而且它不在任何 policy.enabled 里
-    （它不是可选日型）—— 不拦的话，`resolve()` 会把它映射成 fallback，
-    假期里又变回上学日，晚自修就回来了。
 
     ## ⚠️ `policy` 故意不给默认值
 
@@ -145,10 +158,7 @@ def day_type(
     Python 没有编译期的参数检查，这个报错就是我们的「编译器」。
     （手机版那边是 Kotlin 编译期报错，效果一样，理由写在 DayTypePolicy 的注释里。）
     """
-    natural = natural_day_type(d, week, courses)
-    if natural is DayType.REST:
-        return DayType.REST
-    return policy.resolve(natural)
+    return _used_type(natural_day_type(d, week, courses), policy)
 
 
 def day_type_display(
@@ -176,10 +186,9 @@ def day_type_display(
     「用哪套模板」去问**策略**（day_type），两者拼起来才是完整的描述。
     """
     natural = natural_day_type(d, week, courses)
-    # REST 的短路和 day_type() 里的是**同一条规则**，写两遍是因为这个函数
-    # 需要 natural（判有早八）和 used（出标签）两个答案，凑不到一次调用里。
-    # 改策略映射规则时，两处要一起动。
-    used = natural if natural is DayType.REST else policy.resolve(natural)
+    # REST 的短路在 _used_type 里（曾在这里和 day_type 各写一遍，
+    # 抽成共用的一段之后映射规则只有一个定义点）
+    used = _used_type(natural, policy)
     label = DAY_TYPE_LABEL[used]
     return f"{label} · 有早八" if natural is DayType.A else label
 

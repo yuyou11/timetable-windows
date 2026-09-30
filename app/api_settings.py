@@ -141,11 +141,15 @@ class SettingsMixin:
 
         was_opaque = self.store.card_opacity == 100
         side_was_opaque = self.store.sidebar_opacity == 100
-        self.store.bg_image = True
-        if was_opaque:
-            self.store.card_opacity = 90
-        if side_was_opaque:
-            self.store.sidebar_opacity = 90
+        # 一次操作连改最多 3 个设置：batch 收成一次落盘
+        #（不等价于性能问题 —— 数据量小写盘很快；收拢是为了
+        #  中途断电时别留下「图开了、不透明度还没跟上」的半套状态）
+        with self.store.batch():
+            self.store.bg_image = True
+            if was_opaque:
+                self.store.card_opacity = 90
+            if side_was_opaque:
+                self.store.sidebar_opacity = 90
 
         self._notify_settings_changed()
         msg = "背景图已设置"

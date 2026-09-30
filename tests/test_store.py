@@ -1178,5 +1178,137 @@ class TestApplyImport(StoreTestCase):
         self.assertEqual("已导入 1 门课（原课表已替换），作息模板 1 种", msg)
 
 
+# ============================================================
+#  十、解析缓存与 batch 落盘
+#
+#  courses()/templates() 现在带版本化缓存，还出去的是**防御性拷贝**。
+#  这组用例钉三件事：
+#    1. 缓存不能吐出旧数据 —— 改完必须立刻读到新值；
+#    2. 缓存对象不能被调用方污染 —— api 层有「取出来 → 原地改 → 存回去」
+#       的写法，缓存对象直接递出去的话第一次改写就坏了；
+#    3. batch 要么全落、要么不落 —— 中途抛异常不能留下半套状态。
+# ============================================================
+
+
+class TestCachingAndBatch(StoreTestCase):
+
+    def test_mutation_is_visible_immediately(self):
+        """缓存第一条铁律：改完立刻能读到，绝不吐旧数据"""
+        courses = self.store.courses()
+        n = len(courses)
+        courses.append(Course(name="新加的", day_of_week=1, start_node=1,
+                              end_node=2, weeks=frozenset({1})))
+        self.store.save_courses(courses)
+
+        self.assertEqual(n + 1, len(self.store.courses()),
+                         "save 之后 courses() 还在吐缓存的旧列表")
+
+    def test_courses_returns_a_fresh_list_each_call(self):
+        """
+        调用方会**原地改**返回的列表（api_courses 的增删改全是这个写法），
+        所以每次返回的必须是新列表 —— 改它不能污染缓存。
+        """
+        first = self.store.courses()
+        first.append(Course(name="只改我的副本", day_of_week=1, start_node=1,
+                            end_node=2, weeks=frozenset({1})))
+
+        self.assertNotIn("只改我的副本", [c.name for c in self.store.courses()],
+                         "改返回值污染了缓存，下一次读到了别人的改动")
+
+    def test_templates_returns_a_fresh_dict_each_call(self):
+        """同上一条：api_templates 的 shift_wake_time 会替换返回字典里的键"""
+        first = self.store.templates()
+        first[DayType.A] = []
+
+        self.assertTrue(len(self.store.templates()[DayType.A]) > 0,
+                        "改返回的 dict 污染了缓存，A 型模板被清没了")
+
+    def test_reopen_reads_the_same_data_after_caching(self):
+        """存进去 → 重新构造 Store → 读出来必须相等（本项目第一规矩）"""
+        courses = self.store.courses()
+        courses.append(Course(name="往返", day_of_week=3, start_node=5,
+                              end_node=6, weeks=frozenset({2, 3}),
+                              place="301"))
+        self.store.save_courses(courses)
+
+        reopened = self.reopen().courses()
+        self.assertIn("往返", [c.name for c in reopened])
+        # 顺序是稳定的（按数组下标重建），逐位对比即可；
+        # _signature 里含列表（sorted weeks），不能塞集合
+        self.assertEqual([_signature(c) for c in courses],
+                         [_signature(c) for c in reopened])
+
+    def test_batch_writes_once_at_exit(self):
+        """batch 批内的改动攒着，退出时一次落盘、且结果和逐个写完全一样"""
+        with self.store.batch():
+            self.store.bg_image = True
+            self.store.bg_dim = 40
+            self.store.theme = "dark"
+
+        back = self.reopen()
+        self.assertTrue(back.bg_image)
+        self.assertEqual(40, back.bg_dim)
+        self.assertEqual("dark", back.theme)
+
+    def test_batch_exception_leaves_nothing_behind(self):
+        """批中途抛异常 → 整体不落盘，不能留下「改了一半」的状态"""
+        before = self.reopen()
+
+        with self.assertRaises(RuntimeError):
+            with self.store.batch():
+                self.store.bg_image = True
+                raise RuntimeError("半路炸了")
+
+        back = self.reopen()
+        self.assertFalse(back.bg_image, "异常批的改动不该落盘")
+        self.assertFalse(before.bg_image)
+
+    def test_batch_is_nested_safe(self):
+        """嵌套 batch：内层退出不落盘，最外层退出才落一次"""
+        with self.store.batch():
+            self.store.bg_image = True
+            with self.store.batch():
+                self.store.bg_dim = 30
+            # 内层已退出，此时还什么都不该写过 —— 首次启动连文件都还没建
+            self.assertFalse(self.data_path.exists(),
+                             "内层 batch 退出就落盘了，攒不住外层的改动")
+            self.store.theme = "light"
+
+        back = self.reopen()
+        self.assertTrue(back.bg_image)
+        self.assertEqual(30, back.bg_dim)
+        self.assertEqual("light", back.theme)
+
+    def test_apply_import_applies_the_whole_set(self):
+        """
+        导入是所有写路径里动键最多的（学期 + 课表 + 模板 + 日型 + 节数），
+        batch 收拢之后要验证的是**整套**都进来了 —— 缓存之下最容易出的
+        事故就是「文件写了、缓存还在吐旧的」。
+        """
+        p = self.parsed(
+            term={"name": "新学期", "startDate": "2026-09-14", "totalWeeks": 20},
+            courses=[{"name": "高数", "dayOfWeek": 2, "nodes": [3, 4], "weeks": "1-18"}],
+        )
+        msg = self.store.apply_import(p, "replace")
+
+        self.assertIn("已导入 1 门课", msg)
+        after = self.reopen()
+        self.assertEqual("新学期", after.term_name)
+        self.assertEqual(["高数"], [c.name for c in after.courses()])
+        # 缓存路径读到的也必须是新数据
+        self.assertEqual(["高数"], [c.name for c in self.store.courses()])
+
+    def test_ball_state_roundtrip_still_works_with_cache(self):
+        """悬浮窗位置（高频写路径）在缓存下照常往返"""
+        self.store.ball_pos = (120, 88)
+        self.store.ball_edge = "right"
+        self.store.ball_center = 300
+
+        back = self.reopen()
+        self.assertEqual((120, 88), back.ball_pos)
+        self.assertEqual("right", back.ball_edge)
+        self.assertEqual(300, back.ball_center)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
