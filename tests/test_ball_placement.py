@@ -141,6 +141,7 @@ class TestSetBallRectUnits(unittest.TestCase):
 
     def test_converts_logical_to_physical(self):
         from app import main as main_mod
+        from app import ballwin
 
         captured = {}
 
@@ -151,8 +152,10 @@ class TestSetBallRectUnits(unittest.TestCase):
         app = main_mod.App.__new__(main_mod.App)   # 不跑 __init__，够用了
         app._ball_hwnd = 4242
 
+        # _set_ball_rect 住在 ballwin.py，它解析的 ui_scale 是**那个模块**
+        # 命名空间里的名字 —— 要 patch 就得 patch 到它住的地方
         with mock.patch.object(main_mod.winutil, "set_window_rect", fake_set_rect), \
-                mock.patch.object(main_mod, "ui_scale", lambda: 1.25):
+                mock.patch.object(ballwin, "ui_scale", lambda: 1.25):
             ok = app._set_ball_rect(100, 200, 244, 104)
 
         self.assertTrue(ok)

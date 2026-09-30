@@ -131,6 +131,9 @@ class BallButtonTestCase(unittest.TestCase):
 
         # 保证 app.main 是带着假 webview 重新导入的
         sys.modules.pop("app.main", None)
+        # ballwin 也一样：它模块级 `import webview`，不重导入的话
+        # 会留着上一次的真模块，和这里桩掉的 main 对不上
+        sys.modules.pop("app.ballwin", None)
 
         from app import main as main_mod
         self.main_mod = main_mod
@@ -489,9 +492,9 @@ class TestSuppressExpand(BallButtonTestCase):
         之后，这条断言把它钉住 —— 免得以后有人看到「刚启动先别弹」
         那句注释又把它加回来。
         """
-        src = (Path(__file__).resolve().parent.parent / "app" / "main.py") \
+        src = (Path(__file__).resolve().parent.parent / "app" / "ballwin.py") \
             .read_text(encoding="utf-8")
-        # 只看 _create_ball 那一小段
+        # 只看 _create_ball 那一小段（_create_ball 住在 ballwin.py）
         start = src.index("def _create_ball(")
         end = src.index("def _apply_ball_geometry(")
         body = src[start:end]
@@ -602,13 +605,15 @@ class TestSlideContract(BallButtonTestCase):
 
     def test_ball_anim_is_gone_on_both_sides(self):
         """注入通道必须两边同时消失 —— 留半边就是静默失效的温床"""
-        main_src = (Path(__file__).resolve().parent.parent / "app" / "main.py") \
-            .read_text(encoding="utf-8")
-        self.assertNotIn(
-            "ballAnim", main_src,
-            "main.py 里还残留 ballAnim —— 滑出方案里 JS 已经删了这个函数，"
-            "谁要是在哪条路径上把注入加回来，只会静默无效",
-        )
+        app_dir = Path(__file__).resolve().parent.parent / "app"
+        # main.py（编排层）和 ballwin.py（悬浮窗控制）哪边都不能残留
+        for py_name in ("main.py", "ballwin.py"):
+            py_src = (app_dir / py_name).read_text(encoding="utf-8")
+            self.assertNotIn(
+                "ballAnim", py_src,
+                f"{py_name} 里还残留 ballAnim —— 滑出方案里 JS 已经删了这个函数，"
+                "谁要是在哪条路径上把注入加回来，只会静默无效",
+            )
 
         js = (self.WEB / "ball.js").read_text(encoding="utf-8")
         self.assertNotRegex(
@@ -838,7 +843,9 @@ class TestBallExternalClose(BallButtonTestCase):
         蒙混过关（项目里踩过：`assertIn("window.ballAnim", js)` 被
         `window.ballAnimRenamed` 骗过去了）。
         """
-        src = Path(self.main_mod.__file__).read_text(encoding="utf-8")
+        # closing 订阅写在 ballwin.py 的 _create_ball 里
+        src = (Path(self.main_mod.__file__).parent / "ballwin.py") \
+            .read_text(encoding="utf-8")
         self.assertRegex(
             src,
             r"self\.ball\.events\.closing \+= self\._on_ball_closing",
@@ -857,7 +864,9 @@ class TestBallExternalClose(BallButtonTestCase):
         很容易被下一个人顺手加回来。而它失败的时候**不报错**，
         只在用户的机器上偶尔发作 —— 开发机上几乎测不出来。
         """
-        src = Path(self.main_mod.__file__).read_text(encoding="utf-8")
+        # _polish 住在 ballwin.py
+        src = (Path(self.main_mod.__file__).parent / "ballwin.py") \
+            .read_text(encoding="utf-8")
         start = src.index("def _polish(")
         end = src.index("def _apply_ball_geometry(")
         body = src[start:end]

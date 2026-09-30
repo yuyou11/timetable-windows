@@ -3,10 +3,10 @@ Verify the new regression tests actually guard the fix.
 
 A test that passes both before and after a fix proves nothing. So this script:
 
-  1. backs up app/main.py
+  1. backs up app/ballwin.py
   2. neutralizes the `if not self.store.ball_enabled` guards (simulating the
      buggy version), runs the two new tests, and records the result
-  3. restores app/main.py from the backup -- in a finally block, so it is put
+  3. restores app/ballwin.py from the backup -- in a finally block, so it is put
      back even if step 2 explodes
   4. runs the same tests on the real file and records the result
 
@@ -24,7 +24,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TARGET = ROOT / "app" / "main.py"
+TARGET = ROOT / "app" / "ballwin.py"
 
 GUARD = "if not self.store.ball_enabled:"
 NEUTERED = "if False:  # guard neutralized on purpose"
@@ -63,7 +63,7 @@ def summarize(output):
 def main():
     script = TARGET.read_text(encoding="utf-8")
     count = script.count(GUARD)
-    print("guards found in app/main.py: " + str(count))
+    print("guards found in app/ballwin.py: " + str(count))
     if count != 2:
         print("EXPECTED 2 GUARDS -- refusing to continue")
         return 2
@@ -86,10 +86,10 @@ def main():
 
     if backup != script:
         print("")
-        print("RESTORE FAILED -- app/main.py does not match the original!")
+        print("RESTORE FAILED -- app/ballwin.py does not match the original!")
         return 3
     print("")
-    print("app/main.py restored and verified byte-identical")
+    print("app/ballwin.py restored and verified byte-identical")
 
     # ---- phase 2: fixed version ----
     code, out = run_tests()

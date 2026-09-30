@@ -7,7 +7,7 @@ Two mutations, each reverted immediately:
   M2  _ball_drag_end: suppress unconditionally again
       -> expect test_drag_end_suppresses_only_when_cursor_is_over_the_ball FAIL
 
-app/main.py is restored from a byte-exact copy in a finally block.
+app/ballwin.py is restored from a byte-exact copy in a finally block.
 
 ASCII only on purpose (PowerShell 5.1 reads non-BOM files as GBK).
 """
@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TARGET = ROOT / "app" / "main.py"
+TARGET = ROOT / "app" / "ballwin.py"
 
 # Where the fix lives now
 DRAG_FIXED = "self._ball_suppress_expand = self._cursor_over_ball()"
@@ -77,9 +77,9 @@ def main():
         TARGET.write_text(original, encoding="utf-8")
 
     if TARGET.read_text(encoding="utf-8") != original:
-        say("RESTORE FAILED -- app/main.py changed!")
+        say("RESTORE FAILED -- app/ballwin.py changed!")
         return 3
-    say("app/main.py restored byte-identical")
+    say("app/ballwin.py restored byte-identical")
 
     # ---- and the real thing must be green ----
     say("=== the real code ===")

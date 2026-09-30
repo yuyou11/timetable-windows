@@ -150,14 +150,21 @@ class TestPythonCallsJsGlobals(unittest.TestCase):
         """
         上面那份清单不能过期。
 
-        列了但 main.py 里根本不出现的，说明前端已经不调它了 ——
+        列了但 Python 侧根本不出现的，说明前端已经不调它了 ——
         留着会让人以为还有这条调用路径。
+
+        推 JS 的 Python 侧现在分两处：main.py（编排 + 主题/皮肤推送）和
+        ballwin.py（悬浮窗控制，applyDock / ballShown 在那边）。
+        清单里的名字两边都找不到了才算过期。
         """
-        main_src = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
-        stale = [n for n in JS_GLOBALS_CALLED_FROM_PY if n not in main_src]
+        py_sources = "\n".join(
+            (ROOT / "app" / name).read_text(encoding="utf-8")
+            for name in ("main.py", "ballwin.py")
+        )
+        stale = [n for n in JS_GLOBALS_CALLED_FROM_PY if n not in py_sources]
         self.assertEqual(
             [], stale,
-            f"这些前端函数 main.py 已经不用了，从清单里删掉：{stale}",
+            f"这些前端函数 Python 侧已经不用了，从清单里删掉：{stale}",
         )
 
 

@@ -6,7 +6,7 @@ Mutations, each reverted immediately:
   M2  ball.html: flip the arrow overlay side  -> the overlay-side check must fail
   M3  ball.html: hide the panel again         -> the always-visible check must fail
   M4  ball.js:   re-add window.ballAnim       -> the removal check must fail
-  M5  main.py:   re-add the ballAnim inject   -> the removal check must fail
+  M5  ballwin.py: re-add the ballAnim inject -> the removal check must fail
   M6  dock.py:   re-widen EDGES with top      -> the store whitelist check must fail
   M7  dock.py:   make the tween snap          -> the monotonic-tween check must fail
 
@@ -21,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 HTML = ROOT / "app" / "web" / "ball.html"
 JS = ROOT / "app" / "web" / "ball.js"
-MAIN = ROOT / "app" / "main.py"
+BALLWIN = ROOT / "app" / "ballwin.py"
 DOCK = ROOT / "app" / "dock.py"
 
 T = "tests.test_ball_ui."
@@ -43,7 +43,7 @@ MUTATIONS = [
      "window.ballAnim = function (edge, collapsing) {};\n\n"
      "window.applyDock = function (edge, collapsed) {",
      T + "TestSlideContract.test_ball_anim_is_gone_on_both_sides"),
-    ("M5 ballAnim inject re-added to main", MAIN,
+    ("M5 ballAnim inject re-added to ballwin", BALLWIN,
      "# 短过渡淡入淡出。\n        self._push_ball_layout()",
      "# 短过渡淡入淡出。\n        self._eval_js(\n"
      "            self.ball, \"window.ballAnim && window.ballAnim('right', false)\")",
@@ -96,7 +96,7 @@ def run(test_id):
 
 
 def main():
-    files = (HTML, JS, MAIN, DOCK)
+    files = (HTML, JS, BALLWIN, DOCK)
     originals = {p: p.read_text(encoding="utf-8") for p in files}
 
     # sanity: the unmutated code must be green first
