@@ -107,8 +107,10 @@ check("get_today 时间轴连续", check_today)
 def check_week():
     api = make_api()
     w = api.get_week(0)
-    # 节次 5 行（1-2 / 3-4 / 5-6 / 7-8 / 9-10），星期 7 列（周一…周日）
-    assert len(w["rows"]) == 5
+    # 网格按**小节**分行：行数 = 节数信息声明的小节数（默认 "442" → 10），
+    # 星期 7 列（周一…周日）。「上午 1-2 节并成一行」是前端渲染的事，
+    # 接口输出逐节行 —— v2.2 起的契约（tests/test_week_grid.py 同口径）。
+    assert len(w["rows"]) == api.store.node_count
     assert all(len(r["cells"]) == 7 for r in w["rows"]), "每行应有 7 格"
     assert len(w["days"]) == 7, "课表要显示整周七天，含周六日"
 
