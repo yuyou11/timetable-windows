@@ -45,10 +45,14 @@ class ReminderScheduler(threading.Thread):
       · 只对「课」提醒，不对吃饭睡觉提醒（那些不需要提前准备）
     """
 
-    def __init__(self, store: Store, on_fire) -> None:
+    def __init__(self, store: Store, on_fire, on_error=None) -> None:
         super().__init__(daemon=True, name="reminder")
         self.store = store
         self.on_fire = on_fire
+        #: 检查流程出错时的上报通道（通常是 Api.log_error → error.log）。
+        #: 原来这里的 except 是纯 pass —— 提醒悄悄停摆，外面毫无线索。
+        #: 不做成必须参数：单测里造一个调度器不该被逼着配日志管道。
+        self.on_error = on_error
         self._stop = threading.Event()
         self._wake = threading.Event()
 
@@ -119,6 +123,12 @@ class ReminderScheduler(threading.Thread):
                 when = "现在就开始" if left <= 0 else f"{left} 分钟后"
                 self.on_fire(m, when)
                 return
-        except Exception:
-            # 提醒失败不能把线程搞死 —— 那样之后所有提醒都没了，而且没人知道
-            pass
+        except Exception as e:
+            # 提醒失败不能把线程搞死 —— 那样之后所有提醒都没了。
+            # 但也不能完全无感：「为什么不提醒」这种问题原来查无实据
+            # （正是 README 踩坑 4.9 那一类）。有上报通道就记一笔。
+            if self.on_error is not None:
+                try:
+                    self.on_error(f"提醒检查失败：{type(e).__name__}: {e}")
+                except Exception:
+                    pass

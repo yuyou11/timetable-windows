@@ -11,10 +11,26 @@ from datetime import date
 from typing import Any, Optional
 
 from . import builtin_data, engine, skin
+from .api_transfer import ask_open_file
 from .store import THEMES
 
 #: 主题三档的中文名，给「已切换到…」那句提示用。
 THEME_LABEL = {"system": "跟随系统", "light": "始终浅色", "dark": "始终深色"}
+
+
+def _pick_hex(value: Any) -> tuple[str, Optional[str]]:
+    """
+    校验一个用户输入的颜色，返回 (归一化值, 错误消息)。
+
+    `""` / None / 规整不了的空串 → `""`（恢复默认）；格式写错（如 "red"、
+    "#12345"）→ 错误消息。set_accent 和 set_text_color 的校验原来是
+    逐字重复的两段，收在这里 —— 「错误消息长什么样」只有一个定义点。
+    """
+    text = "" if value is None else str(value).strip()
+    picked = skin.normalize_hex(text)
+    if text and picked is None:
+        return "", f"颜色格式不对：{text}（要 #2563eb 这样六位十六进制）"
+    return picked or "", None
 
 
 class SettingsMixin:
@@ -76,12 +92,10 @@ class SettingsMixin:
         颜色格式不对就**如实报错**，不静默当成默认 —— 和 set_theme 同一条
         规矩：让用户以为选上了，比报错更糟。
         """
-        text = "" if value is None else str(value).strip()
-        picked = skin.normalize_hex(text)
-        if text and picked is None:
-            return {"ok": False,
-                    "message": f"颜色格式不对：{text}（要 #2563eb 这样六位十六进制）"}
-        self.store.accent = picked or ""
+        picked, err = _pick_hex(value)
+        if err:
+            return {"ok": False, "message": err}
+        self.store.accent = picked
         self._notify_settings_changed()
         return self._settings_dict()
 
@@ -93,12 +107,10 @@ class SettingsMixin:
         没开背景图时它不生效（前端会把控件禁用），但值照存 ——
         用户先调好文字、再选图，顺序不该有讲究。
         """
-        text = "" if value is None else str(value).strip()
-        picked = skin.normalize_hex(text)
-        if text and picked is None:
-            return {"ok": False,
-                    "message": f"颜色格式不对：{text}（要 #2563eb 这样六位十六进制）"}
-        self.store.text_color = picked or ""
+        picked, err = _pick_hex(value)
+        if err:
+            return {"ok": False, "message": err}
+        self.store.text_color = picked
         self._notify_settings_changed()
         return self._settings_dict()
 
@@ -186,17 +198,10 @@ class SettingsMixin:
 
     def _ask_open_image(self) -> Optional[str]:
         """弹一个「选图片」文件框，返回路径；取消 / 主窗口还没好返回 None。"""
-        if self._window is None:
-            return None
-        import webview
-        result = self._window.create_file_dialog(
-            webview.OPEN_DIALOG,
-            allow_multiple=False,
-            file_types=("图片 (*.jpg;*.jpeg;*.png;*.webp;*.bmp)", "所有文件 (*.*)"),
+        return ask_open_file(
+            self._window,
+            ("图片 (*.jpg;*.jpeg;*.png;*.webp;*.bmp)", "所有文件 (*.*)"),
         )
-        if not result:
-            return None
-        return result[0] if isinstance(result, (list, tuple)) else result
 
     def set_term(self, name: str, start_iso: str, total_weeks: int) -> dict[str, Any]:
         """

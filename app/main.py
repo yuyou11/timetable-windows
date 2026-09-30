@@ -4,8 +4,8 @@
 ## 三个窗口
 
     main    主窗口，带系统标题栏。三个页面都在这里。
-          （悬浮窗这个窗口本身的控制在 app/ballwin.py，页面在 web/ball.html）
     ball    悬浮窗。无边框、置顶、透明、不占任务栏。
+            （这个窗口本身的控制在 app/ballwin.py，页面在 web/ball.html）
     toast   课前提醒用的小提示条。启动时就创建好、平时藏起来。
 
     为什么 toast 要提前创建，而不是到点再建？
@@ -24,13 +24,9 @@
 
 from __future__ import annotations
 
-import ctypes
 import os
-import sys
 import threading
 import time
-from datetime import date, datetime
-from pathlib import Path
 from typing import Optional
 
 import webview
@@ -160,7 +156,10 @@ class App(BallMixin):
         #: 防止退出流程重入。见 _on_main_closing 的注释
         self._shutting_down = False
 
-        self.reminder = ReminderScheduler(self.store, self._fire_reminder)
+        # on_error：提醒检查出错要留痕 —— 原来那边是纯 pass，
+        # 「为什么不提醒」这种问题查无实据（见 reminders.py 的说明）
+        self.reminder = ReminderScheduler(self.store, self._fire_reminder,
+                                          on_error=self.api.log_error)
 
         # 悬浮窗的停靠/动画状态在 BallMixin._init_ball_state（app/ballwin.py）
         self._init_ball_state()
@@ -344,22 +343,20 @@ class App(BallMixin):
         self._apply_theme()
         self._push_skin()
 
-    @staticmethod
-    def _eval_js(window, code: str) -> None:
+    def _eval_js(self, window, code: str) -> None:
         """
         往一个窗口里注入一段 JS。窗口不在（或已经销毁）就当没这回事。
 
         这段 try/except 样板原本在好几个地方各写一遍。收在一处之后，
         「注入失败怎么办」只有一个地方要决定。
 
-        ## ⚠️ 目前是**静默**吞掉的
+        ## 失败会留痕，退出流程除外
 
-        README 踩坑第 4.9 条正好是这件事的反面教材：`_apply_ball_geometry`
-        里一个 `except: pass`，让「拖到右边不缩回去」查了很久没有任何线索。
-
-        下面这几处目前也是静默的 —— **本轮重构保持原样，没有改行为**。
-        要不要统一改成写 error.log，是个独立的决定（会多出日志行），
-        留待单独处理。
+        曾经整段静默 —— README 踩坑第 4.9 条（`except: pass` 让
+        「拖到右边不缩回去」查了很久没有任何线索）就是这种写法的反面教材。
+        现在注入失败会写一行 error.log。唯独 `_shutting_down` 之后依然静默：
+        退出时窗口被一个个销毁，evaluate_js 对着已销毁窗口抛异常是
+        **预期内**的，逐条记只会把日志灌满噪音。
 
         ## 两个细节，改的时候别踩
 
@@ -374,8 +371,16 @@ class App(BallMixin):
             return
         try:
             window.evaluate_js(code)
-        except Exception:
-            pass
+        except Exception as e:
+            if self._shutting_down:
+                return
+            try:
+                self.api.log_error(
+                    f"JS 注入失败（{getattr(window, 'title', '?')}）："
+                    f"{type(e).__name__}: {e}"
+                )
+            except Exception:
+                pass
 
     # ---------------- 事件 ----------------
 
@@ -434,10 +439,11 @@ class App(BallMixin):
             if want_ball:
                 # 用 _ensure_ball：它连「窗口被外部销毁过」这种情况一起处理。
                 self._ensure_ball()
-        except Exception:
+        except Exception as e:
             # 运行中途新建窗口在部分环境下不被支持，
-            # 那就等下次启动再生效，不要让程序崩掉
-            pass
+            # 那就等下次启动再生效，不要让程序崩掉 —— 但要留痕，
+            # 否则「设置里开了悬浮窗却没出来」查无实据
+            self.api.log_error(f"设置变更时重建悬浮窗失败：{type(e).__name__}: {e}")
 
         try:
             if self.ball is not None:
@@ -447,8 +453,8 @@ class App(BallMixin):
                     self._reset_ball_close_button()
                 else:
                     self.ball.hide()
-        except Exception:
-            pass
+        except Exception as e:
+            self.api.log_error(f"设置变更时切换悬浮窗显隐失败：{type(e).__name__}: {e}")
 
         self.reminder.kick()
 
@@ -456,8 +462,8 @@ class App(BallMixin):
         try:
             if self.tray is not None:
                 self.tray.refresh()
-        except Exception:
-            pass
+        except Exception as e:
+            self.api.log_error(f"托盘菜单刷新失败：{type(e).__name__}: {e}")
 
         # 通知主窗口刷新（悬浮窗那边可能改了设置）
         self._eval_js(self.main, "window.refreshAll && window.refreshAll()")
@@ -472,6 +478,7 @@ class App(BallMixin):
             import winsound
             winsound.MessageBeep(winsound.MB_ICONASTERISK)
         except Exception:
+            # 提示音只是锦上添花（Linux/缺声卡时没有 winsound），静默即可
             pass
 
         self._show_toast(
@@ -571,8 +578,10 @@ class App(BallMixin):
                     pass
 
             threading.Thread(target=auto_hide, daemon=True).start()
-        except Exception:
-            pass
+        except Exception as e:
+            # 提醒条弹不出来必须留痕 —— 这是提醒功能的最后一环，
+            # 它静默失败的话用户只会觉得「提醒时灵时不灵」
+            self.api.log_error(f"弹出提醒条失败：{type(e).__name__}: {e}")
 
     def _quit(self) -> None:
         """从托盘菜单或界面里主动退出"""
@@ -595,6 +604,9 @@ class App(BallMixin):
 
         self.reminder.stop()
 
+        # 下面这两处故意**不加日志**：已经在退出流程里，窗口/托盘正在销毁，
+        # 此处的异常多是「对象已经没了」的预期内竞态；而且 log_error 自己
+        # 也可能因为目录被动过而失败。退出阶段的静默是权衡，不是疏忽。
         try:
             if self.tray is not None:
                 self.tray.stop()

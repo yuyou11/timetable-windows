@@ -405,8 +405,11 @@ class BallMixin:
             self._ball_rounded = False
             try:
                 self._apply_ball_geometry()
-            except Exception:
-                pass
+            except Exception as e:
+                # 启动摆位失败必须留痕 —— 否则「悬浮窗贴在左上角」
+                # 这种问题查无实据
+                self.api.log_error(
+                    f"悬浮窗初始几何应用失败：{type(e).__name__}: {e}")
 
             # ---- 启动时要不要压住「自动弹出」 ----
             #
@@ -957,14 +960,15 @@ class BallMixin:
                     self._apply_ball_geometry()
                 self._push_ball_layout()
                 self._reset_ball_close_button()
-            except Exception:
-                pass
+            except Exception as e:
+                # 「点了开关没反应」原来完全没有线索 —— 必须留痕
+                self.api.log_error(f"显示悬浮窗失败：{type(e).__name__}: {e}")
         else:
             try:
                 if self.ball is not None:
                     self.ball.hide()
-            except Exception:
-                pass
+            except Exception as e:
+                self.api.log_error(f"隐藏悬浮窗失败：{type(e).__name__}: {e}")
 
         # 界面上的开关要跟着变
         self._eval_js(self.main, "window.refreshAll && window.refreshAll()")
@@ -999,6 +1003,9 @@ class BallMixin:
         try:
             self.ball.move(nx, ny)
         except Exception:
+            # 这里**刻意**不打日志：拖动中每秒会调几十次，窗口正在关闭时
+            # 每一帧都会失败，逐条记只会把日志灌满。失败返回 ok:False，
+            # 前端会停住拖动；窗口没了的话悬浮窗本来就在收场。
             return {"ok": False}
         return {"ok": True}
 

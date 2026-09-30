@@ -133,11 +133,9 @@ class TemplatesMixin:
 
         full[day_type_enum] = result.blocks
         self.store.save_templates(full)
-        # ⚠️ 这次通知是**重复**的：下面 `_templates_ok` 内部还会再通知一次。
-        # 改动前就是这样（本方法通知一次 + _templates_ok 通知一次），
-        # 而别的模板方法都只通知一次。本轮重构刻意保留原样、不改行为；
-        # 要不要收敛成一次，单独决定。
-        self._notify_settings_changed()
+        # 通知只由 _templates_ok 发一次。原来这里还会先通知一次（一次操作
+        # 两轮「存盘 + 推送 + 刷新」），是历史遗留，已经收敛 ——
+        # 别的模板方法从来都是只通知一次的。
         return self._templates_ok(result.message)
 
     def reset_templates(self) -> dict[str, Any]:

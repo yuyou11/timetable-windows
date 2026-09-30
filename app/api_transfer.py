@@ -15,6 +15,33 @@ from .models import DAY_TYPE_ORDER
 from .store import Store
 
 
+def ask_open_file(window, file_types: tuple[str, ...]) -> Optional[str]:
+    """
+    弹一个「打开文件」框，返回选中的路径；取消 / 窗口未就绪返回 None。
+
+    ## 为什么是模块级函数
+
+    `_ask_open_file`（本文件）和 api_settings 的 `_ask_open_image` 原来各有一份
+    逐字相同的实现，只有文件类型过滤器不一样 —— 收到这里，两边各传各的
+    过滤器。「选完返回什么形状」这种 pywebview 的口径问题（有时是 list、
+    有时是裸字符串）也只需要对一个地方。
+
+    放在 api_transfer 而不是 api.py：api.py 要 import 各个 Mixin 来组合，
+    Mixin 反过来 import api.py 就是循环导入了。
+    """
+    if window is None:
+        return None
+    import webview
+    result = window.create_file_dialog(
+        webview.OPEN_DIALOG,
+        allow_multiple=False,
+        file_types=file_types,
+    )
+    if not result:
+        return None
+    return result[0] if isinstance(result, (list, tuple)) else result
+
+
 class TransferMixin:
     """导入导出、AI 提示词，以及文件选择框。"""
 
@@ -188,17 +215,7 @@ class TransferMixin:
         return {"ok": True, "text": text}
 
     def _ask_open_file(self) -> Optional[str]:
-        if self._window is None:
-            return None
-        import webview
-        result = self._window.create_file_dialog(
-            webview.OPEN_DIALOG,
-            allow_multiple=False,
-            file_types=("课表 JSON (*.json)", "所有文件 (*.*)"),
-        )
-        if not result:
-            return None
-        return result[0] if isinstance(result, (list, tuple)) else result
+        return ask_open_file(self._window, ("课表 JSON (*.json)", "所有文件 (*.*)"))
 
     def _ask_save_file(self, default_name: str) -> Optional[str]:
         if self._window is None:
