@@ -1,8 +1,8 @@
 """
 Verify the new serializable-return tests actually catch the `_parsed` bug.
 
-Puts the exact line that broke import back into api.py, runs the new tests,
-and confirms they go red. Then restores from a byte-exact copy.
+Puts the exact line that broke import back into api_transfer.py, runs the new
+tests, and confirms they go red. Then restores from a byte-exact copy.
 
     python tools/verify_serializable_guard.py
 
@@ -21,7 +21,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-API = ROOT / "app" / "api.py"
+# 那行返回语句原来在 api.py，split_api 重构后随导入导出一并搬进了
+# api_transfer.py —— 守卫的锚点跟着代码走（2026-09 修）。
+API = ROOT / "app" / "api_transfer.py"
 
 FIXED = 'return {"ok": True, "preview": self._preview_dict(parsed)}'
 BROKEN = ('return {"ok": True, "preview": self._preview_dict(parsed), '
@@ -84,11 +86,11 @@ def main():
         API.write_text(original, encoding="utf-8")
 
     if API.read_text(encoding="utf-8") != original:
-        say("RESTORE FAILED -- app/api.py changed!")
+        say("RESTORE FAILED -- app/api_transfer.py changed!")
         return 3
     clear_bytecode()
     say("")
-    say("app/api.py restored byte-identical, __pycache__ cleared")
+    say("app/api_transfer.py restored byte-identical, __pycache__ cleared")
 
     say("")
     say("baseline = " + str(results["baseline"]) + ", mutated = " + str(results["mutated"]))

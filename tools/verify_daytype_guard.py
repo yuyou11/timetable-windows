@@ -23,7 +23,9 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-API = ROOT / "app" / "api.py"
+# 日型那三个桥接方法原来住在 api.py，split_api 重构后搬进了
+# api_templates.py —— 守卫的锚点跟着代码走（2026-09 修）。
+API = ROOT / "app" / "api_templates.py"
 
 TESTS = "tests.test_day_type_policy.TestDayTypeApi"
 
@@ -98,7 +100,7 @@ def main():
     restored = API.read_text(encoding="utf-8") == original
     clear_bytecode()
     say("")
-    say("app/api.py restored byte-identical: " + str(restored))
+    say("app/api_templates.py restored byte-identical: " + str(restored))
     if not restored:
         return 3
 
