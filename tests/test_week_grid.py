@@ -208,12 +208,74 @@ class TestWeekendCoursesShowUp(WeekGridTestCase):
         self.assertEqual(f"{sunday.month}.{sunday.day}", end_text)
 
 
-class TestGridRowsCoverTenNodes(WeekGridTestCase):
-    """节次行本身也不能少 —— 和「七天」是同一类问题"""
+class TestGridRowsFollowPeriods(WeekGridTestCase):
+    """节次行由「节数信息」（store.periods）决定 —— 不再写死五对大课，
+    也不再写死 10 节：一天的小节数 = 各位之和。
 
-    def test_ten_nodes_in_five_rows(self):
+    默认 "442" = 上午 4 节、下午 4 节、晚上 2 节，和程序的 10 个内置
+    小节一一对应：每一小节单独成行。"445"（13 节）这类超过 10 的结构，
+    第 11 节起的时间按晚课节奏外推（见 slots.py）。"""
+
+    def test_default_periods_give_ten_individual_rows(self):
         w = self.api.get_week(0)
-        self.assertEqual([(1, 2), (3, 4), (5, 6), (7, 8), (9, 10)],
+        self.assertEqual([(n, n) for n in range(1, 11)],
+                         [(r["startNode"], r["endNode"]) for r in w["rows"]])
+        self.assertEqual([f"第 {n} 节" for n in range(1, 11)],
+                         [r["label"] for r in w["rows"]])
+
+    def test_rows_cover_exactly_the_declared_nodes(self):
+        """不管结构怎么写，声明的每一节都得有行 —— 漏一行就是漏一类课。
+        "441"（和 9）= 一天 9 节，没有第 10 节"""
+        expected = {"441": 9, "442": 10, "22222": 10, "55": 10, "445": 13}
+        for periods, n in expected.items():
+            self.store.periods = periods
+            self.assertEqual(n, self.store.node_count, periods)
+            w = self.api.get_week(0)
+            self.assertEqual([(k, k) for k in range(1, n + 1)],
+                             [(r["startNode"], r["endNode"]) for r in w["rows"]],
+                             f"periods={periods}")
+
+    def test_periods_beyond_ten_get_extrapolated_times(self):
+        """第 11 节起按晚课节奏外推：45 分钟一节、间歇 5 分钟、20:40 起始"""
+        self.store.periods = "445"          # 4+4+5 = 13 节
+        w = self.api.get_week(0)
+        self.assertEqual(13, len(w["rows"]))
+        row11 = next(r for r in w["rows"] if r["startNode"] == 11)
+        self.assertEqual("20:40", row11["startTime"])
+        self.assertEqual("21:25", row11["endTime"])
+        row13 = next(r for r in w["rows"] if r["startNode"] == 13)
+        self.assertEqual("22:20", row13["startTime"])
+        self.assertEqual("23:05", row13["endTime"])
+
+    def test_course_on_extrapolated_rows_shows_up(self):
+        """第 12-13 节的课：内置时间表之外的节，以前连合法都算不上"""
+        self.store.periods = "445"
+        self.set_courses([Course("晚加课", 1, 12, 13, frozenset({5}), "S-100")])
+        this_week = self.store.week_of(date.today())
+        w = self.api.get_week(5 - this_week)
+        shown = [c for r in w["rows"] for c in r["cells"] if c["name"] == "晚加课"]
+        self.assertEqual(2, len(shown))
+        self.assertEqual(["第 12-13 节", "第 12-13 节"],
+                         [c["nodesText"] for c in shown])
+
+    def test_invalid_periods_fall_back_to_default(self):
+        """data.json 是能手改的：坏值退回默认结构，不能让程序起不来"""
+        self.store._data["periods"] = "440"    # 有 0 —— 一位至少 1 节
+        self.assertEqual("442", self.store.periods)
+        w = self.api.get_week(0)
+        self.assertEqual(10, len(w["rows"]))
+
+    def test_sum_over_day_capacity_is_rejected(self):
+        """和超过 14 = 45 分钟的节排不进一天 —— 退回默认而不是硬着头皮渲染"""
+        self.store._data["periods"] = "456"    # 4+5+6 = 15 > 14
+        self.assertEqual("442", self.store.periods)
+
+    def test_pair_blocks_split_into_individual_rows(self):
+        """"22222"（五段、每段 2 节）= 十节全部逐节分行 ——
+        旧行结构的「成对显示」由前端合并相邻同课实现，不再是行的单位"""
+        self.store.periods = "22222"
+        w = self.api.get_week(0)
+        self.assertEqual([(n, n) for n in range(1, 11)],
                          [(r["startNode"], r["endNode"]) for r in w["rows"]])
 
     def test_row_times_match_the_slot_table(self):
@@ -221,6 +283,60 @@ class TestGridRowsCoverTenNodes(WeekGridTestCase):
         for r in w["rows"]:
             self.assertEqual(slots.fmt(slots.start(r["startNode"])), r["startTime"])
             self.assertEqual(slots.fmt(slots.end(r["endNode"])), r["endTime"])
+
+
+class TestCoursesOutsidePairsStillShow(WeekGridTestCase):
+    """别的学校课不成对 —— 这些课以前在网格里**整门消失**，必须都能显示"""
+
+    def week_of_course(self, course):
+        self.set_courses([course])
+        this_week = self.store.week_of(date.today())
+        return self.api.get_week(5 - this_week if course.weeks == frozenset({5}) else 0)
+
+    def test_single_period_course_shows_up(self):
+        """第 4 节单节的课：旧行结构里没有任何一行的行首是 4，整门课看不见"""
+        w = self.week_of_course(Course("单节课", 1, 4, 4, frozenset({5}), "S-101"))
+        row = next(r for r in w["rows"] if r["startNode"] == 4)
+        cell = next(c for c in row["cells"] if c["dow"] == 1)
+        self.assertEqual("单节课", cell["name"])
+        self.assertEqual("第 4 节", cell["nodesText"])
+
+    def test_course_crossing_a_pair_boundary_shows_up(self):
+        """跨在 2-3 节上的课：不属于任何一对大课，以前同样整门消失"""
+        w = self.week_of_course(Course("跨节裸", 2, 2, 3, frozenset({5}), "S-102"))
+        shown = [c for r in w["rows"] for c in r["cells"] if c["name"] == "跨节裸"]
+        self.assertEqual(2, len(shown), "应出现在第 2 节和第 3 节两行里，供前端合并")
+
+    def test_pair_course_fills_both_of_its_rows(self):
+        """成对的课在逐节行里出现在两行，两行的身份信息完全一致 ——
+        前端按这个一致性做 rowspan 合并，所以后端必须原样给出"""
+        w = self.week_of_course(Course("成对裸", 3, 1, 2, frozenset({5}), "S-103"))
+        rows = [r for r in w["rows"] if r["startNode"] in (1, 2)]
+        cells = [next(c for c in r["cells"] if c["dow"] == 3) for r in rows]
+        self.assertEqual(["成对裸", "成对裸"], [c["name"] for c in cells])
+        self.assertEqual(1, len({(c["name"], c["place"], c["weeksText"]) for c in cells}),
+                         "同一门课在两行的身份必须一致，否则前端合并不了")
+
+    def test_evening_course_shows_school_numbering(self):
+        """晚课的「第几节」跟学校数法走：442 下跨 9-10 两行，报「第 9-10 节」"""
+        w = self.week_of_course(Course("晚课", 4, 9, 10, frozenset({5}), "S-104"))
+        shown = [c for r in w["rows"] for c in r["cells"] if c["name"] == "晚课"]
+        self.assertEqual(2, len(shown))
+        self.assertEqual(["第 9-10 节", "第 9-10 节"], [c["nodesText"] for c in shown])
+
+    def test_evening_course_under_441_reports_one_period(self):
+        """441（一天 9 节）下，第 9 节的课报「第 9 节」"""
+        self.store.periods = "441"
+        w = self.week_of_course(Course("晚课", 4, 9, 9, frozenset({5}), "S-104"))
+        row = next(r for r in w["rows"] if r["startNode"] == 9)
+        cell = next(c for c in row["cells"] if c["dow"] == 4)
+        self.assertEqual("晚课", cell["name"])
+        self.assertEqual("第 9 节", cell["nodesText"])
+        # 手改数据里的 [9,10] 超出了声明的小节数：不崩，宽容地落在第 9 节
+        w = self.week_of_course(Course("旧晚课", 4, 9, 10, frozenset({5}), "S-104"))
+        row = next(r for r in w["rows"] if r["startNode"] == 9)
+        cell = next(c for c in row["cells"] if c["dow"] == 4)
+        self.assertEqual("旧晚课", cell["name"])
 
 
 if __name__ == "__main__":

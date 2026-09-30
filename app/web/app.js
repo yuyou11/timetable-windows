@@ -24,6 +24,7 @@ let STATE = {
   templates: null,
   activeType: 'A',
   weekOffset: 0,
+  maxNode: 10,   // 一天的小节数，boot() 后由节数信息决定（442 → 10）
 };
 /* ⚠️ 这张表 ball.js 里还有一份，**两边的值必须一模一样**。
  *
@@ -86,6 +87,38 @@ async function setBall(next) {
 }
 
 // ==========================================================================
+//  背景图
+// ==========================================================================
+
+/**
+ * 从后端拉背景图并铺到 body 上（铺满整个窗口）。boot() 时一次，
+ * 选择/移除/调暗化后再来。
+ *
+ * 遮罩（暗化）和图必须合成**一条** background-image：CSS 里没法给
+ * 「可能是不存在的图」叠一层半透明黑 —— linear-gradient 接 none 是非法值，
+ * 整条都会被丢掉。所以暗化为 0 时干脆不写渐变层。
+ */
+async function applyBackgroundFromBackend() {
+  const r = await call('get_background_image');
+  if (!r || !r.ok) return;
+
+  const body = document.body;
+  if (r.dataUrl) {
+    const dim = STATE.settings ? STATE.settings.bgDim : 0;
+    body.style.backgroundImage = dim > 0
+      ? `linear-gradient(rgba(0,0,0,${dim / 100}),rgba(0,0,0,${dim / 100})), url("${r.dataUrl}")`
+      : `url("${r.dataUrl}")`;
+    body.classList.add('has-bg');
+  } else {
+    body.style.backgroundImage = '';
+    body.classList.remove('has-bg');
+  }
+  // 暗化滑杆只在有图时可调（和 renderSettings 里的逻辑一致）
+  const dimInput = $('bgDim');
+  if (dimInput) dimInput.disabled = !r.dataUrl;
+}
+
+// ==========================================================================
 //  事件绑定
 // ==========================================================================
 
@@ -102,6 +135,77 @@ function bindEvents() {
     const r = await call('set_theme', $('themePick').value);
     toast(r.message || '');
     if (!r.ok) await renderSettings();   // 没存上就把下拉框拨回原来的值
+  };
+
+  // ---- 自定义外观：存到后端 → 后端把算好的色值推给各窗口，立即生效 ----
+  // 取色器用 change 而不是 input：拖拽取色时 input 会连发几十次，
+  // 每次都是一趟桥 + 一次写盘，等关掉选色框再存一次足够了。
+  $('accentPick').onchange = async (e) => {
+    const r = await call('set_accent', e.target.value);
+    if (!r || r.ok === false) { toast((r && r.message) || '没换成'); return; }
+    STATE.settings = r;
+    renderAccent(e.target.value);
+  };
+  $('accentReset').onclick = async () => {
+    const r = await call('set_accent', '');
+    if (!r || r.ok === false) { toast((r && r.message) || '没换成'); return; }
+    STATE.settings = r;
+    renderAccent('');
+  };
+
+  $('cardOpacity').onchange = async (e) => {
+    const r = await call('set_card_opacity', Number(e.target.value));
+    if (!r || r.ok === false) { toast((r && r.message) || '没存上'); return; }
+    STATE.settings = r;
+    $('cardOpacityValue').textContent = r.cardOpacity + '%';
+  };
+
+  $('sidebarOpacity').onchange = async (e) => {
+    const r = await call('set_sidebar_opacity', Number(e.target.value));
+    if (!r || r.ok === false) { toast((r && r.message) || '没存上'); return; }
+    STATE.settings = r;
+    $('sidebarOpacityValue').textContent = r.sidebarOpacity + '%';
+  };
+
+  $('bgDim').onchange = async (e) => {
+    const r = await call('set_bg_dim', Number(e.target.value));
+    if (!r || r.ok === false) { toast((r && r.message) || '没存上'); return; }
+    STATE.settings = r;
+    $('bgDimValue').textContent = r.bgDim + '%';
+    applyBackgroundFromBackend();   // 遮罩压在图上，暗化变了要重新合成
+  };
+
+  $('bgChoose').onclick = async () => {
+    const r = await call('choose_background_image');
+    if (r && r.cancelled) return;   // 用户在文件框里点了取消，什么都不用说
+    toast((r && r.message) || '');
+    if (r && r.ok) {
+      STATE.settings = r.settings;
+      await renderSettings();       // 透明度可能被顺手调过，把滑杆同步回来
+      applyBackgroundFromBackend();
+    }
+  };
+  $('bgClear').onclick = async () => {
+    const r = await call('remove_background_image');
+    if (!r || r.ok === false) { toast((r && r.message) || '没删掉'); return; }
+    STATE.settings = r.settings;
+    await renderSettings();
+    applyBackgroundFromBackend();
+  };
+
+  // 文字颜色和取色器一样的口径：change 而不是 input，关掉选色框再存一次。
+  // 成品色值由后端推（含卡片底色的深浅配对），这里只把选中态画回来。
+  $('textPick').onchange = async (e) => {
+    const r = await call('set_text_color', e.target.value);
+    if (!r || r.ok === false) { toast((r && r.message) || '没换成'); return; }
+    STATE.settings = r;
+    renderTextColor(e.target.value, true);
+  };
+  $('textReset').onclick = async () => {
+    const r = await call('set_text_color', '');
+    if (!r || r.ok === false) { toast((r && r.message) || '没换成'); return; }
+    STATE.settings = r;
+    renderTextColor('', true);
   };
 
   // 课表翻周
@@ -232,6 +336,7 @@ async function refreshAll() {
   const t = await call('bootstrap');
   STATE.term = t.term;
   STATE.settings = t.settings;
+  STATE.maxNode = t.maxNode;   // 导入新结构后节次下拉框要跟着变
   // 悬浮窗在自己窗口上被关掉时，后端会推 refreshAll 过来 ——
   // 设置页的开关要是不同步，它就停在旧状态。
   $('swBall').checked = t.settings.ballEnabled;
@@ -253,11 +358,16 @@ async function boot() {
   STATE.term = data.term;
   STATE.settings = data.settings;
   STATE.templates = null;   // 让作息页第一次打开时去后端取
+  STATE.maxNode = data.maxNode;   // 课程/作息表单的节次下拉框跟着学校结构走
 
   // 主题的强制档，这里兜一次底：Python 那边（main.py 的 _apply_theme）也推了
   // 一次，但它可能赶在页面加载完成之前 —— 那时 window.__applyTheme 还没定义，
   // 会被 `&&` 静默跳过。两处推的值同源（store.theme），重复推无害。
   if (window.__applyTheme) window.__applyTheme(data.settings.theme);
+  // 自定义外观同理：Python 推的 _push_skin 可能赶在页面加载完成之前，
+  // bootstrap 里带了同源的成品色值，这里再兜一次。
+  if (window.__applySkin && data.skin) window.__applySkin(data.skin);
+  applyBackgroundFromBackend();   // 背景图是前端拉的，就只有这一处
 
   $('brandSub').textContent = `第 ${data.term.todayWeek} 周`;
   // 「关于」页的版本号也在这里填 —— 唯一来源是后端（app/__init__.py），

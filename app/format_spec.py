@@ -63,6 +63,18 @@ MAX_NODE = slots.MAX_NODE
 MAX_WEEK_LIMIT = 30
 DEFAULT_TOTAL_WEEKS = 19
 
+#: 节数信息（periods）的默认值："442" = 上午 4 节、下午 4 节、晚上 2 节。
+#:
+#: 一串数字从左到右对应一天里从早到晚的各个时段，每位数字 = 该时段的
+#: 45 分钟节数；**一天的小节数 = 各位之和**，不再写死 10 ——
+#: "442"（和 10）与内置时间表一一对应；"441"（和 9）= 一天 9 节、
+#: 没有第 10 节；"445"（和 13）= 第 11-13 节按晚课节奏外推时间
+#: （见 slots.py）。上限由「一天」决定：外推到第 14 节 23:55 下课为止。
+#:
+#: 不同的学校节次结构不同（有的学校课不成对），导入文件里可以带上
+#: 自己学校的结构；老文件没有这个字段，按默认值处理 —— 这就是向下兼容。
+DEFAULT_PERIODS = "442"
+
 WEEKDAY_CN = {1: "周一", 2: "周二", 3: "周三", 4: "周四", 5: "周五", 6: "周六", 7: "周日"}
 
 _DAY_NAMES = {
@@ -171,6 +183,40 @@ def _normalize_weeks(raw: str) -> str:
     return re.sub(r"\s+", "", out)
 
 
+def node_count(periods: str) -> int:
+    """
+    学校一天的小节数 = 节数信息各位之和（"442" → 10，"445" → 13）。
+
+    节次（课程 nodes、网格行、编辑器的下拉框）的合法范围都由它决定，
+    不再有写死的 10。
+    """
+    return sum(int(ch) for ch in periods)
+
+
+def normalize_periods(value: Any) -> Optional[str]:
+    """
+    校验节数信息，合法返回规整后的字符串，不合法返回 None。
+
+    合法 = 1-14 位数字、每位 1-9、各位之和不超过 MAX_NODE（14）。
+    位数和总和的上限都来自「一天」：第 11 节起按晚课节奏外推
+    （45 分钟一节、间歇 5 分钟、20:40 起始），到第 14 节 23:55 下课，
+    再多的节跨进第二天，物理上排不下。
+
+    "441"（和 9）= 一天 9 节、没有第 10 节；"442"（和 10）= 内置结构；
+    "445"（和 13）= 第 11-13 节是外推时间槽。
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not 1 <= len(text) <= MAX_NODE:
+        return None
+    if any(ch not in "123456789" for ch in text):
+        return None
+    if node_count(text) > MAX_NODE:
+        return None
+    return text
+
+
 def format_weeks(weeks: frozenset[int] | set[int]) -> str:
     """
     反向：把集合压成最短的字符串。
@@ -230,6 +276,8 @@ class Parsed:
     #: 和 courses 一样用「None = 不动」而不是「None = 用默认」——
     #: 否则用户每次导入一份只改课表的文件，作息策略都会被打回默认值。
     day_types: Optional[DayTypePolicy] = None
+    #: 节数信息（可选）。None = 文件里没写，不要动现有设置。
+    periods: Optional[str] = None
     warnings: list[str] = field(default_factory=list)
 
 
@@ -275,12 +323,29 @@ def parse(text: str, fallback_total_weeks: int = DEFAULT_TOTAL_WEEKS) -> Parsed:
     if isinstance(term_obj, dict):
         term, total_weeks = _parse_term(term_obj)
 
+    # ---- periods 段（可选，节数信息）----
+    # 必须在 templates / courses 之前解析：这两段的节次合法性都由
+    # 「学校一天有多少小节」（= periods 各位之和）决定。
+    periods: Optional[str] = None
+    raw_periods = root.get("periods")
+    if raw_periods is not None:
+        periods = normalize_periods(raw_periods)
+        if periods is None:
+            raise FormatError(
+                f'periods（节数信息）写的是 "{raw_periods}"，不对。\n'
+                "它是一串数字（1-14 位，每位 1-9），从左到右是当天从早到晚"
+                '各时段的节数，例如 "442" = 上午 4 节、下午 4 节、晚上 2 节；'
+                "各位数字之和不能超过 14（一天能排下的节数，"
+                "45 分钟一节从 08:30 排到 23:55）。"
+            )
+    node_limit = node_count(periods or DEFAULT_PERIODS)
+
     # ---- templates 段 ----
     warnings: list[str] = []
     templates: Optional[dict[DayType, list[Block]]] = None
     tmpl_obj = root.get("templates")
     if isinstance(tmpl_obj, dict):
-        templates = _parse_templates(tmpl_obj, warnings)
+        templates = _parse_templates(tmpl_obj, warnings, node_limit)
     elif tmpl_obj is not None:
         raise FormatError("templates 必须是一个对象（用 { } 包起来）")
 
@@ -304,7 +369,7 @@ def parse(text: str, fallback_total_weeks: int = DEFAULT_TOTAL_WEEKS) -> Parsed:
         for i, item in enumerate(raw_courses):
             if not isinstance(item, dict):
                 raise FormatError(f"courses 第 {i + 1} 项不是对象。")
-            parsed.append(_parse_course(item, i, total_weeks))
+            parsed.append(_parse_course(item, i, total_weeks, node_limit))
         courses = parsed
         warnings.extend(_detect_conflicts(parsed))
 
@@ -319,7 +384,7 @@ def parse(text: str, fallback_total_weeks: int = DEFAULT_TOTAL_WEEKS) -> Parsed:
             "如果你是想导入课表，检查一下 courses 数组是不是空的。"
         )
 
-    return Parsed(term, courses, templates, day_types, warnings)
+    return Parsed(term, courses, templates, day_types, periods, warnings)
 
 
 def _strip_code_fence(text: str) -> str:
@@ -363,7 +428,8 @@ def _parse_term(obj: dict[str, Any]) -> tuple[Term, int]:
     return Term(name, start, total_weeks), total_weeks
 
 
-def _parse_course(obj: dict[str, Any], index: int, total_weeks: int) -> Course:
+def _parse_course(obj: dict[str, Any], index: int, total_weeks: int,
+                  node_limit: int) -> Course:
     """报错时带上课程名 —— 否则用户面对 19 条数据不知道是哪一条错了"""
     raw_name = str(obj.get("name", "")).strip()
 
@@ -385,8 +451,9 @@ def _parse_course(obj: dict[str, Any], index: int, total_weeks: int) -> Course:
         start_node, end_node = int(nodes[0]), int(nodes[1])
     except (TypeError, ValueError):
         err("nodes 里必须都是数字")
-    if not (1 <= start_node <= MAX_NODE and 1 <= end_node <= MAX_NODE):
-        err(f"nodes 的节次必须在 1–{MAX_NODE} 之间，现在是 [{start_node}, {end_node}]")
+    if not (1 <= start_node <= node_limit and 1 <= end_node <= node_limit):
+        err(f"nodes 的节次必须在 1–{node_limit} 之间"
+            f"（这份文件声明一天 {node_limit} 节），现在是 [{start_node}, {end_node}]")
     if start_node > end_node:
         err(f"nodes 的起始节次比结束节次大：[{start_node}, {end_node}]")
 
@@ -575,7 +642,8 @@ def _parse_day_types(obj: dict[str, Any]) -> DayTypePolicy:
     return DayTypePolicy(enabled=frozenset(enabled), fallback=fallback)
 
 
-def _parse_templates(obj: dict[str, Any], warnings: list[str]) -> dict[DayType, list[Block]]:
+def _parse_templates(obj: dict[str, Any], warnings: list[str],
+                     node_limit: int) -> dict[DayType, list[Block]]:
     """
     只要求用户提供**想改的那几种日型**，没提供的会回落到内置模板。
     这样改一个起床时间只要写十来行，而不是把六套模板整套抄一遍。
@@ -602,7 +670,7 @@ def _parse_templates(obj: dict[str, Any], warnings: list[str]) -> dict[DayType, 
             if not isinstance(item, dict):
                 raise FormatError(f"templates.{key} 第 {i + 1} 项不是对象。")
             try:
-                blocks.append(_parse_block(item))
+                blocks.append(_parse_block(item, node_limit))
             except FormatError as e:
                 raise FormatError(f"templates.{key} 第 {i + 1} 项：{e}") from None
 
@@ -614,7 +682,7 @@ def _parse_templates(obj: dict[str, Any], warnings: list[str]) -> dict[DayType, 
     return out
 
 
-def _parse_block(obj: dict[str, Any]) -> Block:
+def _parse_block(obj: dict[str, Any], node_limit: int) -> Block:
     start_raw = str(obj.get("start", "")).strip()
     end_raw = str(obj.get("end", "")).strip()
     if not start_raw:
@@ -652,8 +720,8 @@ def _parse_block(obj: dict[str, Any]) -> Block:
             a, b = int(nodes_field[0]), int(nodes_field[1])
         except (TypeError, ValueError):
             raise FormatError("nodes 里必须都是数字") from None
-        if not (1 <= a <= MAX_NODE and 1 <= b <= MAX_NODE):
-            raise FormatError(f"nodes 的节次必须在 1–{MAX_NODE} 之间，现在是 [{a}, {b}]")
+        if not (1 <= a <= node_limit and 1 <= b <= node_limit):
+            raise FormatError(f"nodes 的节次必须在 1–{node_limit} 之间，现在是 [{a}, {b}]")
         if a > b:
             raise FormatError(f"nodes 的起始节次比结束节次大：[{a}, {b}]")
         nodes = (a, b)
@@ -714,6 +782,7 @@ def serialize(
     courses: Optional[list[Course]],
     templates: Optional[dict[DayType, list[Block]]] = None,
     day_types: Optional[DayTypePolicy] = None,
+    periods: str = DEFAULT_PERIODS,
 ) -> str:
     """
     生成 JSON 文本。
@@ -735,6 +804,14 @@ def serialize(
     lines.append("{")
     lines.append(f'  "format": "{FORMAT_ID}",')
     lines.append(f'  "version": {VERSION},')
+
+    # 节数信息：只有和默认结构不同才写出来。
+    # ⚠️ 不能无条件写 —— 和手机版导出的文件有逐字节的同源约定
+    # （tests/test_core.py 的 byte-for-byte 测试），老文件里没有这个字段，
+    # 默认结构再写一遍只会让每一次导出都多出一行、diff 满天飞。
+    # 读取方对缺省字段按 DEFAULT_PERIODS 处理，语义完全等价。
+    if periods != DEFAULT_PERIODS:
+        lines.append(f'  "periods": "{periods}",')
 
     lines.append('  "term": {')
     lines.append(f'    "name": "{_escape(term_name)}",')
@@ -928,7 +1005,7 @@ def day_types_from_json(text: str) -> DayTypePolicy:
         return DayTypePolicy.DEFAULT
 
 
-def templates_from_json(text: str) -> dict[DayType, list[Block]]:
+def templates_from_json(text: str, node_limit: int = node_count(DEFAULT_PERIODS)) -> dict[DayType, list[Block]]:
     """
     读回本地存储里的模板。
 
@@ -947,6 +1024,6 @@ def templates_from_json(text: str) -> dict[DayType, list[Block]]:
         # 少了这一步，None.items() 会让程序在启动阶段直接崩掉。
         return {}
     try:
-        return _parse_templates(obj, [])
+        return _parse_templates(obj, [], node_limit)
     except (FormatError, TypeError, AttributeError, ValueError):
         return {}

@@ -116,8 +116,8 @@ function blockDialog(dayType, existing, index) {
   nodesWrap.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-dim)';
   nodesWrap.append(inNodesOn, document.createTextNode('这是课表格子（有课时自动换成课程名和教室）'));
 
-  const inNodeA = nodeSelect(b.nodes ? b.nodes[0] : 1);
-  const inNodeB = nodeSelect(b.nodes ? b.nodes[1] : 2);
+  const inNodeA = nodeSelect(b.nodes ? b.nodes[0] : 1, STATE.maxNode);
+  const inNodeB = nodeSelect(b.nodes ? b.nodes[1] : 2, STATE.maxNode);
 
   form.append(
     mk('这一格做什么', inTitle, true),

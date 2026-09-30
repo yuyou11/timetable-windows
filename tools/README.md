@@ -31,8 +31,8 @@
 | `verify_ball_guard.py` | 悬浮窗按钮自我禁用后的恢复路径 |
 | `verify_close_button.py` / `verify_close_e2e.py` | 「关闭」按钮真的关掉、且设置开关同步 |
 | `verify_external_close_guard.py` | 外部关闭被拦截降级为隐藏（`tests/test_ball_ui.py:196` 引用其 M3 变异） |
-| `verify_hover_guard.py` / `verify_hover_e2e.py` | 贴边收起后悬停滑出 |
-| `verify_anim_guards.py` | 动画的令牌 / 精确收口 / 中断续走（`tests/test_ball_ui.py:734` 引用） |
+| `verify_hover_guard.py` / `verify_hover_e2e.py` | 贴边收起后悬停滑出（e2e 按窗口**位置**判断展开/收起 —— 固定尺寸后宽度不再变化） |
+| `verify_anim_guards.py` | 滑出方案的页面契约：把手留白、箭头侧位、ballAnim 双侧删净、tween 插值（对应 `TestSlideContract` / `TestBallPageContract` / `TestTweenSlide`） |
 | `verify_grid_guard.py` | 周视图 5×7 网格形状 |
 | `verify_daytype_guard.py` | 日型启用策略 |
 
@@ -44,7 +44,7 @@
 |---|---|
 | `exp_corner.py` | README「⭐ 一个藏得很深的坑：`disable_shadow()` 会把圆角一起关掉」整节 |
 | `exp_anim_fps.py` | `app/main.py:76` 的 160ms 动画时长就是它量出来的 |
-| `exp_dock.py` / `exp_windows.py` | 依赖 `app/main.py:50-57` 的再导出（含 `_bg_color`），**删掉那行它们会 ImportError** |
+| `exp_dock.py` / `exp_windows.py` | **exp_dock.py 已过时**（滑出方案重构后引用的 `collapsed_size`/`CARD_W` 不存在了，见文件头说明）；两者都依赖 `app/main.py` 的显式再导出（含 `_bg_color`），删掉那行会 ImportError |
 | `exp_shell.py` / `exp_swp.py` / `exp_resize.py` | 窗口样式 / 双缓冲 / 尺寸下限 |
 
 ## 四、探针 `probe_*.py`（6 个，一次性）
@@ -53,7 +53,10 @@
 `app/main.py:485` 提到的 `exp_toolwin.py` **已经不在了**（引用是历史遗留）。
 
 `probe_ball_anim.py`、`probe_ball_hover.py`、`probe_ball_hover_src.py`、
-`probe_dock_anim.py`、`probe_import_ui.py`、`probe_suppress_off.py`
+`probe_dock_anim.py`（采样**窗口 x 位置**的动画 ramp —— 固定尺寸后宽度恒定）、
+`probe_import_ui.py`、`probe_suppress_off.py`。
+另：`probe_expand.py` 所诊断的「弹出中途露出未绘制区域」已被滑出方案根治，
+留作抓帧+像素统计的方法存档（见文件头说明）。
 
 > 它们用 `PIL.ImageGrab` 截图比对，所以**装 Pillow 才能跑**（已在 `requirements.txt`）。
 

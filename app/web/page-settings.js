@@ -21,6 +21,19 @@ async function renderSettings() {
   // 和 <select> 的 option.value 对上 —— 别在这里做映射，多一层就多一处会漂移。
   $('themePick').value = t.settings.theme;
 
+  renderAccent(t.settings.accent || '');
+  $('cardOpacity').value = t.settings.cardOpacity;
+  $('cardOpacityValue').textContent = t.settings.cardOpacity + '%';
+  $('sidebarOpacity').value = t.settings.sidebarOpacity;
+  $('sidebarOpacityValue').textContent = t.settings.sidebarOpacity + '%';
+  $('bgDim').value = t.settings.bgDim;
+  $('bgDimValue').textContent = t.settings.bgDim + '%';
+  // 没有背景图时暗化没意义，禁用掉比让用户白调一把好
+  $('bgDim').disabled = !t.settings.bgImage;
+  // 文字颜色同理：只在有背景图时生效（深浅配对是跟着图走的），没图就禁用。
+  // 之前存过的值保留着，重新选图会自动回来。
+  renderTextColor(t.settings.textColor || '', t.settings.bgImage);
+
   $('termName').value = t.term.name;
   $('termStart').value = t.term.start;
   $('termWeeks').value = t.term.totalWeeks;
@@ -30,6 +43,68 @@ async function renderSettings() {
   await renderDayTypes();
 
   updateStatusPill(t.settings);
+}
+
+// ==========================================================================
+//  自定义外观
+// ==========================================================================
+
+/** 主色调快捷色板。挑顺手的几个色相，自定义走旁边的取色器。 */
+const ACCENT_PRESETS = ['#2563eb', '#0d9488', '#16a34a', '#7c3aed', '#db2777', '#ea580c'];
+
+/**
+ * 画一排色板圆点，标出当前选中的那个。active 传 '' 表示用默认 ——
+ * 此时六颗都不描边，旁边取色器恢复成默认蓝。
+ */
+function renderAccent(active) {
+  const row = $('accentRow');
+  // 只重建圆点，取色器和「默认」按钮是写在 HTML 里的，别动它们
+  row.querySelectorAll('.swatch').forEach((n) => n.remove());
+  ACCENT_PRESETS.forEach((c) => {
+    const dot = el('button', 'swatch' + (c === active ? ' active' : ''));
+    dot.type = 'button';
+    dot.style.background = c;
+    dot.title = c;
+    dot.onclick = async () => {
+      const r = await call('set_accent', c);
+      if (!r || r.ok === false) { toast((r && r.message) || '没换成'); return; }
+      STATE.settings = r;
+      renderAccent(c);
+      $('accentPick').value = c;
+    };
+    row.insertBefore(dot, $('accentPick'));
+  });
+  $('accentPick').value = active || '#2563eb';
+}
+
+/** 文字颜色快捷色板。深色图配白字是最常见的诉求，顺手给个暖黄和深色。 */
+const TEXT_PRESETS = ['#ffffff', '#fde68a', '#1a1d23'];
+
+/**
+ * 画文字颜色那一排：色板圆点 + 取色器 + 「默认」。enabled 传 false 时
+ * 全部禁用 —— 没有背景图时这个设置不生效，可点但没反应比禁用更糟。
+ */
+function renderTextColor(active, enabled) {
+  const row = $('textColorRow');
+  const on = enabled !== false;
+  row.querySelectorAll('.swatch').forEach((n) => n.remove());
+  TEXT_PRESETS.forEach((c) => {
+    const dot = el('button', 'swatch' + (c === active ? ' active' : ''));
+    dot.type = 'button';
+    dot.style.background = c;
+    dot.title = c;
+    dot.disabled = !on;
+    dot.onclick = async () => {
+      const r = await call('set_text_color', c);
+      if (!r || r.ok === false) { toast((r && r.message) || '没换成'); return; }
+      STATE.settings = r;
+      renderTextColor(c, true);
+    };
+    row.insertBefore(dot, $('textPick'));
+  });
+  $('textPick').value = active || '#ffffff';
+  $('textPick').disabled = !on;
+  $('textReset').disabled = !on;
 }
 
 /**

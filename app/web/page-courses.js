@@ -86,8 +86,8 @@ function courseDialog(existing) {
     inDay.appendChild(o);
   });
 
-  const inStart = nodeSelect(c.startNode);
-  const inEnd = nodeSelect(c.endNode);
+  const inStart = nodeSelect(c.startNode, STATE.maxNode);
+  const inEnd = nodeSelect(c.endNode, STATE.maxNode);
 
   const inWeeks = document.createElement('input');
   inWeeks.className = 'input';

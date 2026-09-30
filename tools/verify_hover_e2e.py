@@ -32,13 +32,13 @@ ROOT = Path(__file__).resolve().parent.parent
 EXE = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "dist" / "时间规划表.exe"
 
 BALL_TITLE = "时间规划表悬浮窗"
-EXPANDED_MIN_WIDTH = 200
 
 # data.json is written in LOGICAL pixels; Win32 reports PHYSICAL ones.
 # The display here is 2560x1600 @ 125%, so physical = logical * 1.25.
 SCALE = 1.25
 BALL_CENTER = 600          # logical, along the right edge
-TAB_SHORT, TAB_LONG = 26, 76
+HANDLE_W = 13              # logical, exposed handle width when collapsed
+WINDOW_W = 270             # logical, fixed window width (never resizes!)
 
 user32 = ctypes.windll.user32
 
@@ -60,10 +60,6 @@ def rect_of(hwnd):
     r = RECT()
     user32.GetWindowRect(ctypes.wintypes.HWND(hwnd), ctypes.byref(r))
     return r
-
-
-def size_of(r):
-    return r.right - r.left, r.bottom - r.top
 
 
 def rect_text(r):
@@ -123,14 +119,34 @@ def seed_state(tmp, data_file, env):
     return True
 
 
-def expected_tab_centre():
-    """Where the collapsed tab will be, in physical pixels."""
-    # work area right edge (logical) = 2560 / 1.25 = 2048
-    area_right_logical = round(user32.GetSystemMetrics(0) / SCALE)
-    x = area_right_logical - TAB_SHORT          # logical
-    y = BALL_CENTER - TAB_LONG // 2             # logical
-    return (round(x * SCALE) + round(TAB_SHORT * SCALE / 2),
-            round(y * SCALE) + round(TAB_LONG * SCALE / 2))
+def docked_left_physical():
+    """Left edge of the window when COLLAPSED, physical px.
+
+    Since the fixed-size slide rework the window never resizes, so
+    collapsed vs expanded is a POSITION difference, not a width one:
+    collapsed = window slid off-screen, only the handle left visible.
+    """
+    monitor_right_logical = round(user32.GetSystemMetrics(0) / SCALE)
+    return round((monitor_right_logical - HANDLE_W) * SCALE)
+
+
+def expanded_left_physical():
+    """Left edge of the window when EXPANDED (flush against the edge), physical px."""
+    monitor_right_logical = round(user32.GetSystemMetrics(0) / SCALE)
+    # expanded = content flush against the edge: the far handle stays off-screen
+    return round((monitor_right_logical - WINDOW_W + HANDLE_W) * SCALE)
+
+
+def handle_centre():
+    """Where the exposed handle will be when collapsed, in physical pixels."""
+    x = docked_left_physical() + round(HANDLE_W * SCALE / 2)
+    y = round(BALL_CENTER * SCALE)     # window is vertically centred on ball_center
+    return (x, y)
+
+
+def is_expanded(r):
+    """Position-based state check: the window slid back on screen or not."""
+    return r.left <= expanded_left_physical() + 5
 
 
 def case_a(env, data_file):
@@ -145,22 +161,22 @@ def case_a(env, data_file):
     r = rect_of(hwnd)
     log("  at launch         : " + rect_text(r))
 
-    w, h = size_of(r)
-    cx, cy = r.left + w / 2, r.top + h / 2
+    cx = r.left + round(HANDLE_W * SCALE / 2)   # centre of the exposed handle
+    cy = r.top + (r.bottom - r.top) // 2
     move_to(cx, cy)
     time.sleep(1.8)
     r2 = rect_of(hwnd)
-    expanded = size_of(r2)[0] > EXPANDED_MIN_WIDTH
+    expanded = is_expanded(r2)
     log("  after first hover : " + rect_text(r2) + "  expanded=" + str(expanded))
     kill_all()
     return expanded
 
 
 def case_b(env, data_file):
-    """Cursor already on the tab at launch -> must stay collapsed."""
+    """Cursor already on the handle at launch -> must stay collapsed."""
     log("")
-    log("=== CASE B: cursor ALREADY on the tab at launch ===")
-    cx, cy = expected_tab_centre()
+    log("=== CASE B: cursor ALREADY on the handle at launch ===")
+    cx, cy = handle_centre()
     log("  parking cursor at (" + str(cx) + "," + str(cy) + ") before launch")
     proc, hwnd = launch(env, (cx, cy))
     if not hwnd:
@@ -168,7 +184,7 @@ def case_b(env, data_file):
         return None
     time.sleep(2.5)          # give any spurious expand time to happen
     r = rect_of(hwnd)
-    expanded = size_of(r)[0] > EXPANDED_MIN_WIDTH
+    expanded = is_expanded(r)
     log("  state after launch: " + rect_text(r) + "  expanded=" + str(expanded))
     log("  (must be False -- the pointer was already there, so there is no")
     log("   genuine 'enter' to react to)")

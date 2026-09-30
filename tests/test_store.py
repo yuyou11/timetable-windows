@@ -569,8 +569,9 @@ class TestClampingAndNormalisation(StoreTestCase):
 
     # ---- ball_edge：getter 与 setter 各有一份白名单 ----
 
-    def test_ball_edge_setter_accepts_all_four_edges(self):
-        self.assertEqual(("left", "right", "top", "bottom"), EDGES)
+    def test_ball_edge_setter_accepts_both_side_edges(self):
+        """滑出方案只支持左右贴边（上下边已取消停靠，见 dock.EDGES 的说明）"""
+        self.assertEqual(("left", "right"), EDGES)
         for edge in EDGES:
             self.store.ball_edge = edge
             self.assertEqual(edge, self.store.ball_edge)
@@ -592,11 +593,15 @@ class TestClampingAndNormalisation(StoreTestCase):
         """
         getter 的白名单是独立的一份 —— 绕过 setter 直接往 _data 里塞脏值，
         模拟「存档被手工改过 / 旧版本写进了新值」。
+
+        **top/bottom 必须归到这一类**：旧版本支持四边停靠，存档里可能存着
+        上下边。滑出方案没有上下边的几何，留着旧值只会算出错误的窗口位置，
+        规范成空串让悬浮窗退回自由浮动才是安全行为。
         """
         for edge in EDGES:
             self.store._data["ball_edge"] = edge
             self.assertEqual(edge, self.store.ball_edge)
-        for bad in ("diagonal", "LEFT", None, 123):
+        for bad in ("diagonal", "LEFT", None, 123, "top", "bottom"):
             self.store._data["ball_edge"] = bad
             self.assertEqual("", self.store.ball_edge, f"{bad!r} 应该被规范成空串")
 

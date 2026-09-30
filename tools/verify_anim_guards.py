@@ -1,12 +1,14 @@
 """
-Verify the animation tests actually fail when the animation is broken.
+Verify the slide-animation tests actually fail when the behaviour is broken.
 
 Mutations, each reverted immediately:
-  M1  ball.html: drop --ball-anim-ms            -> the cross-file check must fail
-  M2  ball.html: remove the collapse fast-fade  -> the asymmetry check must fail
-  M3  ball.html: let buttons wrap again         -> the nowrap check must fail
-  M4  ball.js:   rename window.ballAnim         -> the bridge check must fail
-  M5  main.py:   make BALL_ANIM_MS inconsistent -> the cross-file check must fail
+  M1  ball.html: shrink the panel padding     -> the handle-zone check must fail
+  M2  ball.html: flip the arrow overlay side  -> the overlay-side check must fail
+  M3  ball.html: hide the panel again         -> the always-visible check must fail
+  M4  ball.js:   re-add window.ballAnim       -> the removal check must fail
+  M5  main.py:   re-add the ballAnim inject   -> the removal check must fail
+  M6  dock.py:   re-widen EDGES with top      -> the store whitelist check must fail
+  M7  dock.py:   make the tween snap          -> the monotonic-tween check must fail
 
 ASCII only on purpose (PowerShell 5.1 reads non-BOM files as GBK).
 """
@@ -20,27 +22,40 @@ ROOT = Path(__file__).resolve().parent.parent
 HTML = ROOT / "app" / "web" / "ball.html"
 JS = ROOT / "app" / "web" / "ball.js"
 MAIN = ROOT / "app" / "main.py"
+DOCK = ROOT / "app" / "dock.py"
 
 T = "tests.test_ball_ui."
+D = "tests.test_dock."
+S = "tests.test_store.TestClampingAndNormalisation."
 
 MUTATIONS = [
-    ("M1 CSS var removed", HTML, "--ball-anim-ms: 160ms;", "--wrong-name: 160ms;",
-     T + "TestAnimTimingMatchesCss.test_css_duration_equals_python_constant"),
-    ("M2 fast collapse fade removed", HTML,
-     "      transition-duration: calc(var(--ball-anim-ms) * 0.45);\n"
-     "      transition-delay: 0ms;\n", "",
-     T + "TestAnimTimingMatchesCss.test_collapse_fade_is_faster_than_expand_fade"),
-    ("M3 button nowrap removed", HTML,
-     "      white-space: nowrap;\n      overflow: hidden;\n"
-     "      transition: background .15s, border-color .15s;",
-     "      transition: background .15s, border-color .15s;",
-     T + "TestAnimTimingMatchesCss.test_buttons_do_not_wrap"),
-    ("M4 ballAnim renamed", JS, "window.ballAnim = function",
-     "window.ballAnimRenamed = function",
-     T + "TestAnimTimingMatchesCss.test_ball_js_defines_ball_anim"),
-    ("M5 python duration drifted", MAIN, "BALL_ANIM_MS = 160",
-     "BALL_ANIM_MS = 250",
-     T + "TestAnimTimingMatchesCss.test_css_duration_equals_python_constant"),
+    ("M1 handle padding removed", HTML, "padding: 9px 24px;", "padding: 9px 11px;",
+     D + "TestBallPageContract.test_panel_padding_reserves_the_handle_zones"),
+    ("M2 arrow overlay side flipped", HTML,
+     "body.dock-right #tab { left: 1px; }",
+     "body.dock-right #tab { right: 1px; }",
+     D + "TestBallPageContract.test_arrow_overlay_sits_on_the_exposed_side"),
+    ("M3 panel hidden again", HTML,
+     "padding: 9px 24px;", "padding: 9px 24px;\n      display: none;",
+     D + "TestBallPageContract.test_panel_is_always_visible"),
+    ("M4 ballAnim re-added to JS", JS,
+     "window.applyDock = function (edge, collapsed) {",
+     "window.ballAnim = function (edge, collapsing) {};\n\n"
+     "window.applyDock = function (edge, collapsed) {",
+     T + "TestSlideContract.test_ball_anim_is_gone_on_both_sides"),
+    ("M5 ballAnim inject re-added to main", MAIN,
+     "# 短过渡淡入淡出。\n        self._push_ball_layout()",
+     "# 短过渡淡入淡出。\n        self._eval_js(\n"
+     "            self.ball, \"window.ballAnim && window.ballAnim('right', false)\")",
+     T + "TestSlideContract.test_ball_anim_is_gone_on_both_sides"),
+    ("M6 top/bottom edges re-allowed", DOCK,
+     'EDGES = ("left", "right")',
+     'EDGES = ("left", "right", "top", "bottom")',
+     S + "test_ball_edge_setter_accepts_both_side_edges"),
+    ("M7 tween snaps instead of ramping", DOCK,
+     "return int(round(x0 + (x1 - x0) * p)), y0, w, h",
+     "return x1, y0, w, h",
+     D + "TestTweenSlide.test_x_moves_monotonically_toward_the_target"),
 ]
 
 
@@ -81,7 +96,8 @@ def run(test_id):
 
 
 def main():
-    originals = {p: p.read_text(encoding="utf-8") for p in (HTML, JS, MAIN)}
+    files = (HTML, JS, MAIN, DOCK)
+    originals = {p: p.read_text(encoding="utf-8") for p in files}
 
     # sanity: the unmutated code must be green first
     say("=== baseline (unmutated) ===")
@@ -115,7 +131,7 @@ def main():
 
     restored = all(p.read_text(encoding="utf-8") == s for p, s in originals.items())
     say("")
-    say("all three files restored byte-identical: " + str(restored))
+    say("all " + str(len(files)) + " files restored byte-identical: " + str(restored))
     if not restored:
         return 3
 

@@ -11,6 +11,13 @@ START[0] 是占位，永远不用。这样写 START[3] 时，3 就是课表上�
 
 第 1-2 节中间只有 5 分钟换场，所以实际占用的是一个完整的 08:30–10:05 时间块，
 而不是「08:30–09:15 + 09:20–10:05」两个独立的块。
+
+## 节次上限：不写死 10，由「一天」决定
+
+内置时间表只到第 10 节（20:35 下课），但节数信息允许学校声明更多的节。
+第 11 节起按**晚课节奏**外推：每节 45 分钟、中间歇 5 分钟，从 20:40 开始。
+外推到第 14 节（23:10–23:55）就到头了 —— 一天只有 24 小时，这是物理上限，
+不是谁拍脑袋定的数字。
 """
 
 from typing import Optional
@@ -44,18 +51,36 @@ END: tuple[int, ...] = (
     20 * 60 + 35,   # 10  20:35
 )
 
-MAX_NODE = 10
+#: 节次的一天上限。第 11 节起外推（每节 45 分钟、间歇 5 分钟、20:40 起始），
+#: 到第 14 节 23:55 下课为止 —— 再多就跨进第二天了。
+MAX_NODE = 14
 
 #: 一天的分钟数。写死成常量，比到处散落 1440 好
 MINUTES_PER_DAY = 24 * 60
 
 
+def _slot(node: int) -> tuple[int, int]:
+    """某节的 (开始, 结束) 分钟数：内置表 1-10，之外按晚课节奏外推"""
+    if node <= 10:
+        return START[node], END[node]
+    k = node - 10
+    start = END[10] + 5 * k + 45 * (k - 1)
+    return start, start + 45
+
+
+def _check(node: int) -> None:
+    if not 1 <= node <= MAX_NODE:
+        raise ValueError(f"节次必须在 1-{MAX_NODE} 之间，现在是 {node}")
+
+
 def start(node: int) -> int:
-    return START[node]
+    _check(node)
+    return _slot(node)[0]
 
 
 def end(node: int) -> int:
-    return END[node]
+    _check(node)
+    return _slot(node)[1]
 
 
 def fmt(minute: int) -> str:

@@ -6,12 +6,18 @@
 读  tools/icon-source.png          （原始素材，**不要手改**）
 写  app/assets/icon.png            （给托盘用，正方形、居中、已清理透明边）
 写  app/assets/icon.ico            （给窗口图标和 exe 用，多尺寸）
+写  app/web/icon.png               （给主界面左上角的品牌位用，同一张图）
 
 三个用途：
 
     托盘图标    pystray 要一个 PIL Image     → icon.png
     窗口图标    pywebview 要一个 .ico 路径   → icon.ico
     exe 图标    PyInstaller 的 --icon        → icon.ico
+
+为什么 web/ 里还要再放一份：主界面由 pywebview 的**内置 HTTP 服务器**
+托管，服务根目录是 web/ —— 页面里 `../assets/icon.png` 会越界 404
+（裂图）。所以品牌位直接引用同目录的 `icon.png`，由本脚本和 assets
+那份一起生成，来源仍然是 icon-source.png 这一处。
 
 ## 为什么不直接把素材当图标用
 
@@ -63,6 +69,9 @@ except ImportError:                                       # noqa: BLE001
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "tools" / "icon-source.png"
 OUT_DIR = ROOT / "app" / "assets"
+#: 主界面品牌位用的那份（页面由 pywebview 内置 HTTP 服务托管，根目录是
+#: app/web/，跨目录引用会 404 —— 见模块 docstring 的说明）
+WEB_OUT = ROOT / "app" / "web" / "icon.png"
 
 #: .ico 里要包含的尺寸。16/24/32/48 是最常用的四档，
 #: 64/128 给大图标视图，256 给现代高 DPI 下的超大显示。
@@ -134,6 +143,11 @@ def main():
     big.save(png)
     print(f"写出 {png.relative_to(ROOT)}  {PNG_SIZE}x{PNG_SIZE}  "
           f"{png.stat().st_size / 1024:.1f} KB")
+
+    # ---- web/icon.png：给主界面左上角的品牌位（同一张图，见 docstring）----
+    big.save(WEB_OUT)
+    print(f"写出 {WEB_OUT.relative_to(ROOT)}  {PNG_SIZE}x{PNG_SIZE}  "
+          f"{WEB_OUT.stat().st_size / 1024:.1f} KB")
 
     # ---- icon.ico：给窗口和 exe ----
     #

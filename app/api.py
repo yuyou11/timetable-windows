@@ -25,7 +25,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
-from . import __version__, engine, format_spec, slots
+from . import __version__, engine, format_spec, skin, slots
 from .models import DAY_TYPE_LABEL, DAY_TYPE_ORDER, Course, Kind
 from .store import Store
 
@@ -114,10 +114,14 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
             "isFirstLaunch": self.store.is_first_launch,
             "term": self._term_dict(),
             "settings": self._settings_dict(),
+            # 自定义外观的成品（算好的色值）。Python 推一次（main._push_skin）
+            # 可能赶在页面加载完成之前，boot() 拿这份再兜一次 —— 同源的值，
+            # 重复应用无害（和 theme 兜底是同一个思路）。
+            "skin": self._skin_dict(),
             "today": self.get_today(),
             "dayTypes": [{"key": t.value, "label": DAY_TYPE_LABEL[t]} for t in DAY_TYPE_ORDER],
             "kinds": [k.value for k in Kind],
-            "maxNode": slots.MAX_NODE,
+            "maxNode": self.store.node_count,
             "maxWeeks": format_spec.MAX_WEEK_LIMIT,
         }
 
@@ -139,6 +143,14 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
             "ballEnabled": self.store.ball_enabled,
             "remindLead": self.store.remind_lead,
             "theme": self.store.theme,
+            # 自定义外观的原始值（色值/百分比）。成品色值走 _skin_dict ——
+            # 前端只负责把算好的东西设上去，不再实现一遍颜色推导。
+            "accent": self.store.accent,
+            "textColor": self.store.text_color,
+            "cardOpacity": self.store.card_opacity,
+            "sidebarOpacity": self.store.sidebar_opacity,
+            "bgImage": self.store.bg_image,
+            "bgDim": self.store.bg_dim,
             "hasCustomTemplates": self.store.has_custom_templates,
             "hasCustomDayTypes": self.store.has_custom_day_types,
             # 「要不要把作息配置一起导出」的判据 —— 模板**或**日型被改过都算。
@@ -147,6 +159,17 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
             "hasCustomScheduleConfig": self.store.has_custom_schedule_config,
             "dayTypes": self.store.day_type_policy().as_dict(),
         }
+
+    def _skin_dict(self) -> dict[str, Any]:
+        """自定义外观的**成品**：按当前深浅档算好的 CSS 变量值。"""
+        return skin.main_payload(
+            self.store.theme,
+            self.store.accent,
+            self.store.card_opacity,
+            self.store.bg_image,
+            self.store.text_color,
+            self.store.sidebar_opacity,
+        )
 
     # ============================================================
     #  今天
@@ -264,35 +287,60 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
                 "shortType": _short_day_type(day_type),
             })
 
+        # 行结构来自「节数信息」（store.periods，默认 "442"）：一天的小节数
+        # = 各位之和，不再写死 10 —— "442" 就是内置的 10 小节，"445" 是 13 小节
+        # （第 11-13 节的时间按晚课节奏外推，见 slots.py）。每节单独成行，
+        # 有的学校课不成对，按大课分行会整行漏课；同一门课横跨几行时，
+        # 由前端用 rowspan 把相邻的同课格子合并回去。
+        #
+        # ⚠️ 行标签直接用小节号：学校数法和内部编号在这里是一一对应的
+        # （每节 = 一个 45 分钟小节）。
         rows = []
-        for start_node, end_node in [(1, 2), (3, 4), (5, 6), (7, 8), (9, 10)]:
+        node_limit = self.store.node_count
+        for start in range(1, node_limit + 1):
+            rows.append({
+                "startNode": start,
+                "endNode": start,
+                "label": f"第 {start} 节",
+                "startTime": slots.fmt(slots.start(start)),
+                "endTime": slots.fmt(slots.end(start)),
+                "cells": [],
+            })
+
+        for row in rows:
             cells = []
             for dow in range(1, WEEK_DAYS + 1):
+                # ⚠️ 匹配必须按「节点区间有重叠」，不能像以前那样要求
+                # start_node 恰好等于行首 —— 以前行是写死的五对大课，
+                # 别的学校单节的课、跨在 2-3 节上的课，一行都对不上，
+                # 在课表页上**完全不显示**（连「有这行」的机会都没有）。
                 hit = next(
                     (
                         c for c in courses
                         if c.enabled and c.day_of_week == dow
-                        and c.start_node == start_node and week in c.weeks
+                        and c.start_node <= row["endNode"]
+                        and c.end_node >= row["startNode"]
+                        and week in c.weeks
                     ),
                     None,
                 )
+                nodes_text = None
+                if hit is not None:
+                    nodes_text = (
+                        f"第 {hit.start_node}-{hit.end_node} 节"
+                        if hit.end_node > hit.start_node
+                        else f"第 {hit.start_node} 节"
+                    )
                 cells.append(
                     {
                         "dow": dow,
                         "name": hit.name if hit else None,
                         "place": hit.place if hit else None,
                         "weeksText": format_spec.format_weeks(hit.weeks) + " 周" if hit else None,
-                        "nodesText": f"第 {start_node}-{end_node} 节" if hit else None,
+                        "nodesText": nodes_text,
                     }
                 )
-            rows.append({
-                "startNode": start_node,
-                "endNode": end_node,
-                "label": f"第 {start_node}-{end_node} 节",
-                "startTime": slots.fmt(slots.start(start_node)),
-                "endTime": slots.fmt(slots.end(end_node)),
-                "cells": cells,
-            })
+            row["cells"] = cells
 
         return {
             "week": week,

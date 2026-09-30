@@ -23,7 +23,9 @@ from __future__ import annotations
 class AiPrompt:
 
     @staticmethod
-    def for_courses(term_name: str, start_date: str, total_weeks: int) -> str:
+    def for_courses(term_name: str, start_date: str, total_weeks: int,
+                    periods: str = "442") -> str:
+        node_limit = sum(int(ch) for ch in periods)
         return f"""你是数据格式转换助手。请把我提供的课程信息转换成下面这个 JSON 格式。
 
 # 输出格式
@@ -33,6 +35,7 @@ class AiPrompt:
 {{
   "format": "timetable",
   "version": 2,
+  "periods": "{periods}",
   "term": {{
     "name": "{term_name}",
     "startDate": "{start_date}",
@@ -49,6 +52,17 @@ class AiPrompt:
   ]
 }}
 
+# periods 节数信息（重要，先看材料再定）
+
+- 一串数字（1-14 位，每位 1-9），从左到右是当天从早到晚各时段的节数
+  （通常是上午、下午、晚上）。**各位之和 = 这所学校一天有多少节**
+- 例如 "442" = 上午 4 节、下午 4 节、晚上 2 节（共 10 节）；
+  "445" = 上午 4 节、下午 4 节、晚上 5 节（共 13 节）
+- 当前值是 "{periods}"（共 {node_limit} 节）。**如果材料里的节次结构和它
+  不一样，必须修改它**
+- 各位之和不能超过 14（一天排不下更多 45 分钟的节）
+- 课程 nodes 里的节次从 1 开始按顺序对应
+
 # term 段（已经帮你填好，原样保留即可）
 
 - name：学期名称
@@ -59,8 +73,8 @@ class AiPrompt:
 
 - name        课程名，字符串
 - dayOfWeek   星期几，1 到 7 的整数（**周一=1**，周日=7）
-- nodes       数组 [起始节次, 结束节次]，两个整数，范围 1-10 且起始 ≤ 结束
-              连堂课写成 [1, 2]，**不要**拆成两条记录
+- nodes       数组 [起始节次, 结束节次]，两个整数，范围 1-{node_limit} 且
+              起始 ≤ 结束。连堂课写成 [1, 2]，**不要**拆成两条记录
 - weeks       上课周次，字符串，写法见下
 - place       教室，字符串；没有就整个省略这个字段
 - enabled     false 表示这门课停开，一般不用写
@@ -85,6 +99,9 @@ class AiPrompt:
 第 7 节 15:55-16:40     第 8 节 16:45-17:30
 第 9 节 19:00-19:45     第 10 节 19:50-20:35
 
+如果 periods 超过 10，第 11 节起按晚课节奏延续：每节 45 分钟、
+间歇 5 分钟，第 11 节 20:40-21:25、第 12 节 21:30-22:15，以此类推。
+
 「1-2 节」表示第 1 节和第 2 节连堂，nodes 写 [1, 2]。
 
 # 输出要求（重要）
@@ -102,7 +119,8 @@ class AiPrompt:
 """
 
     @staticmethod
-    def for_templates(term_name: str) -> str:
+    def for_templates(term_name: str, periods: str = "442") -> str:
+        node_limit = sum(int(ch) for ch in periods)
         return f"""你是数据格式转换助手。请把我描述的日常作息转换成下面这个 JSON 格式。
 
 （这是给「{term_name}」用的）
@@ -164,7 +182,7 @@ class AiPrompt:
 例如上午第 1-2 节、3-4 节、5-6 节、7-8 节、9-10 节这五段，
 通常都该是 nodes 占位格，因为它们本来就可能有课。
 
-节次范围是 1-10。「1-2 节」→ nodes: [1, 2]
+节次范围是 1-{node_limit}。「1-2 节」→ nodes: [1, 2]
 
 # 两条硬性规则
 
@@ -204,8 +222,10 @@ class AiPrompt:
 2. 严格合法：字符串用双引号，不能有注释，不能有尾随逗号
 3. 检查 weeks 里的周次有没有超出 totalWeeks
 4. 检查 dayOfWeek 是否在 1-7 之间（周一=1）
-5. 检查 nodes 是否是两个整数且起始 ≤ 结束，值在 1-10 之间
+5. 检查 nodes 是否是两个整数且起始 ≤ 结束，值在 periods 声明的节数范围内
+   （默认 "442" 即 1-10）
 6. 检查 startDate 是不是周一，格式 YYYY-MM-DD
+7. 检查 periods（如果写了）是不是 1-14 位数字、每位 1-9、各位之和不超过 14
 
 你上次生成的 JSON（供参考）：
 

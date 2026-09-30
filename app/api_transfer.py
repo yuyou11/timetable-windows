@@ -183,6 +183,7 @@ class TransferMixin:
                 self.store.term_name,
                 self.store.term_start.isoformat(),
                 self.store.total_weeks,
+                self.store.periods,
             )
         return {"ok": True, "text": text}
 

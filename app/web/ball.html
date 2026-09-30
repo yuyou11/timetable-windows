@@ -5,24 +5,40 @@
   <title>时间规划表 · 悬浮窗</title>
   <style>
     /* ======================================================================
-       桌面悬浮窗 —— 两种形态
+       桌面悬浮窗 —— 两种形态，一个固定尺寸的窗口
 
          ┌─────────────────────────────┐      ┌──┐
-         │ ● 前往教室        还剩 2 分 │      │  │
-         │   接着 14:00 第 5-6 节      │  ⇄   │◀ │   ← 贴边收起
+         │ ● 前往教室        还剩 2 分 │      │◀ │
+         │   接着 14:00 第 5-6 节      │  ⇄   │  │   ← 贴边收起
          │   [打开主窗口]  [隐藏]      │      │  │
          └─────────────────────────────┘      └──┘
-              展开（自由浮动 / 悬停时）          收起（贴边时）
+              展开（自由浮动 / 悬停时）          收起（贴左右边时）
 
-       形态由 <body> 上的 class 决定，Python 那边算好之后调 applyDock() 切换。
+       ## 收起是怎么实现的（重要：这个窗口永不 resize）
+
+       窗口尺寸**恒定**（270×104，Python 创建后就不再改）。卡片左右各留
+       13px 的空白把手区，收起时 Python 把**整窗平移**到屏幕外、只留把手那条；
+       悬停再平移回来。所以：
+
+         · 页面内容从头到尾都是完整渲染的，没有任何"展开到一半还没画出来"的
+           区域 —— 旧版逐帧 resize 时露出灰底的问题从根上不存在了
+         · 收起/展开动画 = 纯窗口移动，CSS 里**没有**动画时间线要配合，
+           唯一的过渡是露出条上箭头的淡入淡出（120ms，纯装饰）
+         · 形态由 <body> 上的 class 决定，Python 那边算好之后调 applyDock() 切换
 
        ## 尺寸必须和 app/dock.py 里的常量对上
 
-         CARD_W = 244     CARD_H = 104
-         TAB_SHORT = 26   TAB_LONG = 76
+         WINDOW_W = 270   WINDOW_H = 104   SLIDE_W = 13
 
-       对不上的话，窗口和内容尺寸不一致，会露出一截奇怪的空白。
-       改一边记得改另一边。
+       对账关系：#panel 的左右 padding 24 = SLIDE_W(13) + 11，
+       内容列宽 = 270 − 48 = 222。改一边记得改另一边（有测试核对）。
+
+       ## 展开时窗口并不全部进来
+
+       收起 = 整窗滑出屏幕外、只留把手那条；展开 = 只滑到**内容贴住
+       屏幕边缘**为止 —— 靠屏幕边的那条把手区留在屏外，滑出距离正好
+       是内容区宽度。所以展开态的卡片看起来是贴边的（和旧版一样），
+        只是在内侧多出一段 13px 的空白把手区。
 
        ## 箭头为什么用 CSS 三角形而不是「◀▶」字符
 
@@ -40,7 +56,6 @@
       --btn-bg: #fafbfc;
       --btn-border: #e4e7ec;
       --hover-bg: #f0f2f5;
-      --dock-tab-bg: #eef1f5;
 
       /* 页面里那圈 1px 边框的圆角半径。
 
@@ -53,20 +68,7 @@
          tests/test_dock.py 里有一条测试会读这个文件来核对，
          改一边忘了另一边，跑测试会当场报出来。 */
       --radius-card: 10px;
-      --radius-tab: 8px;
-
-      /* 收起 / 展开动画的时长。
-
-         ⚠️ **必须和 app/main.py 的 BALL_ANIM_MS 相等。**
-
-         为什么要两边各写一份：窗口尺寸只能由 Python 逐帧改（那是原生窗口，
-         网页改不了），而内容淡出交给 CSS 过渡更顺。于是这就成了一条
-         由两个进程、两套机制共同演出的动画 —— 两条时间线得一起走完。
-
-         没有任何机制保证它们相等，所以 tests/test_ball_ui.py 里有一条测试
-         直接读这个文件核对；改一边忘了另一边，跑测试会当场报出来。
-         （和 --radius-card 那边是同一类约定。） */
-      --ball-anim-ms: 160ms;
+      --radius-tab: 6px;
     }
 
     /* 主题三档（设置页里选）：跟随系统 / 始终浅色 / 始终深色。
@@ -82,7 +84,6 @@
         --btn-bg: #23272f;
         --btn-border: #2f3540;
         --hover-bg: #2a2f38;
-        --dock-tab-bg: #23272f;
       }
     }
 
@@ -94,7 +95,6 @@
       --btn-bg: #23272f;
       --btn-border: #2f3540;
       --hover-bg: #2a2f38;
-      --dock-tab-bg: #23272f;
     }
 
     html, body {
@@ -109,22 +109,24 @@
       cursor: default;
     }
 
-    /* 收起成小方框时，底色要跟着换成方框的颜色。
+    /* ====================== 卡片（唯一的内容层） ======================
 
-       因为 #tab 自己画了圆角，圆角**外面**露出来的那一小块就是 body 的底色。
-       不换的话，方框四角会露出卡片色，看起来像四个颜色不对的小三角。 */
-    body.layout-tab { background: var(--dock-tab-bg); }
+       #panel **常驻显示**：收起时它并没有被藏起来，只是整窗滑到了
+       屏幕外、露出它左右把手区中的一条。所以这里没有 layout-tab/layout-card
+       的 display 切换 —— 布局 class 只管「箭头覆盖层显不显示」。
 
-    /* ====================== 展开的卡片 ====================== */
+       左右 padding 的 24 = SLIDE_W(13) + 11：多出来的 13 就是收起时
+       露在屏幕外的把手区。内容列宽因此和旧版完全一致（222px），
+       卡片只是两侧各多出一条把手区。 */
 
     #panel {
-      display: none;
+      display: flex;
       flex-direction: column;
       justify-content: center;
       gap: 3px;
       width: 100%;
       height: 100%;
-      padding: 9px 11px;
+      padding: 9px 24px;
       background: var(--surface);
       border: 1px solid var(--border);
       /* 半径见 :root 里 --radius-card 的说明 */
@@ -133,74 +135,7 @@
       overflow: hidden;
     }
 
-    body.layout-card #panel { display: flex; }
     body.layout-card #panel:active { cursor: grabbing; }
-
-    /* ====================== 收起 / 展开动画 ======================
-
-       分工：**窗口尺寸归 Python，内容淡出归 CSS。**
-
-         Python  逐帧 resize + move（见 main._animate_ball），
-                 让原生窗口自己收窄 / 变扁。
-         CSS     把卡片内容淡出。
-
-       为什么内容必须淡出：窗口一变窄，`#panel` 是 `width: 100%`，
-       也跟着变窄，里面的文字就开始被挤成一团、逐字截断。
-       淡出之后那段挤压就看不见了，观感上只剩下背景收成一条。
-
-       为什么淡出用 CSS 过渡、而不是让 Python 逐帧设透明度：
-
-         · 淡出对**时序不敏感** —— 差个二三十毫秒根本看不出来，
-           所以两条时间线不需要逐帧对齐，只要总时长一致就行
-         · 中途反向时（鼠标刚移开又移回来），CSS 过渡会**自己从当前位置
-           往回走**。让 Python 逐帧算就得多写一套插值状态
-
-       下面用 `#panel > *` 选中三行内容（.row1 / #next / .row3），
-       这样不用给每个元素加 class —— 面板的直接子元素就这三块。 */
-
-    /* ⚠️ 淡出必须**快**、而且要分方向，这不是细节，是截图看出来的问题。
-
-       最初写成两边都用完整的 160ms，结果画面是这样（抓帧图：
-       build-logs/shots/anim_collapse_440ms.png）：动画进行到六成时
-       窗口已经窄到 80px 左右，而内容还有四成不透明度，
-       于是两个按钮的文字被挤得**竖着折行** ——「打开主窗口」变成
-       「打开 / 主窗 / 口」三行，比"没动画"还难看。
-
-       原因是两条时间线虽然都是 160ms，但曲线的**形状**不同：
-       Python 那边是三次方 ease-out（前段冲得快），
-       CSS 的 ease-out 是 cubic-bezier(0,0,0.58,1)（更平缓）。
-       于是同一个时刻，窗口已经走了 76%，内容才淡到 40%。
-
-       所以现在按方向分开处理，针对两种情况下最难看的那一段：
-
-         收起  内容**立刻**淡出，45% 时长（72ms）就走完。
-                这样等窗口压到最窄的时候，内容早就不在了。
-         展开  内容**等一会儿**再淡入，40% 时长（64ms）的延迟。
-                等窗口先长开一些，才让文字出现，不会一上来就挤。 */
-
-    #panel > * {
-      transition: opacity calc(var(--ball-anim-ms) * 0.6) ease-out
-                  calc(var(--ball-anim-ms) * 0.4),
-                  transform calc(var(--ball-anim-ms) * 0.6) ease-out
-                  calc(var(--ball-anim-ms) * 0.4);
-    }
-
-    body.ball-collapsing #panel > * {
-      opacity: 0;
-      /* 收起方向：去等延迟、并压缩时长 —— 这两行就是上面说的"立刻淡出" */
-      transition-duration: calc(var(--ball-anim-ms) * 0.45);
-      transition-delay: 0ms;
-    }
-
-    /* 收起时内容朝屏幕边缘的方向挪一小段，让它看起来是被"吸"进去的，
-       而不是原地变透明。方向随停靠边变 —— 贴右边就朝右走。
-
-       距离取 10px 是刻意的：太大（比如 40px）会在快速收起时看出"甩出去"的
-       突兀感，太小又和纯淡出没区别。 */
-    body.dock-right.ball-collapsing  #panel > * { transform: translateX(10px); }
-    body.dock-left.ball-collapsing   #panel > * { transform: translateX(-10px); }
-    body.dock-top.ball-collapsing    #panel > * { transform: translateY(-10px); }
-    body.dock-bottom.ball-collapsing #panel > * { transform: translateY(10px); }
 
     .row1 { display: flex; align-items: center; gap: 6px; min-width: 0; }
 
@@ -227,7 +162,9 @@
       flex: 0 0 auto;
       font-size: 15px;
       font-weight: 700;
-      color: #2563eb;
+      /* 跟随设置里的主色调（Python 会把算好的色值推给 __applyAccent）；
+         没自定义时回落到原来的蓝。 */
+      color: var(--accent, #2563eb);
       font-variant-numeric: tabular-nums;
       white-space: nowrap;
     }
@@ -261,10 +198,8 @@
       font: inherit;
       font-size: 11.5px;
       cursor: pointer;
-      /* 收起动画时面板会一路收窄，按钮跟着变窄。
-         不禁用换行的话，文字会被挤成竖着的三行（截图里见过的样子），
-         比没有动画还难看。这里强制单行 + 裁掉溢出，
-         配合上面的快速淡出，那一段就完全看不出来了。 */
+      /* 按钮文字强制单行：窗口极窄时（理论上进不到了，留作兜底）
+         文字折行比截断更难看。 */
       white-space: nowrap;
       overflow: hidden;
       transition: background .15s, border-color .15s;
@@ -272,70 +207,63 @@
 
     .row3 button:hover { background: var(--hover-bg); }
 
-    /* ====================== 收起的小方框 ====================== */
+    /* ====================== 收起态的把手（露出条） ======================
+
+       收起时露出来的那条就是 #panel 自己的边缘（同一张卡片的留白区，
+       连着边框和圆角），#tab 只是叠在上面的**透明覆盖层**：
+       负责箭头、hover 高亮和点击目标。
+
+       只在贴边收起时显示。方向别搞反：贴**右**边时窗口往右滑出屏幕，
+       留在屏幕里的是页面**左侧**那条 → 覆盖层放左边；
+       贴左边镜像。 */
 
     #tab {
       display: none;
+      position: absolute;
+      top: 1px;
+      bottom: 1px;
+      width: 12px;              /* SLIDE_W − 1：给面板的 1px 边框让位，别把它盖住 */
       place-items: center;
-      width: 100%;
-      height: 100%;
-      background: var(--dock-tab-bg);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-tab);
       cursor: pointer;
-      position: relative;
+      /* hover 高亮的圆角：和收起态对账的 --radius-tab 保持一份契约 */
+      border-radius: var(--radius-tab);
     }
 
     body.layout-tab #tab { display: grid; }
-
-    /* 四个角都圆，所以边框也是**一整圈**，不去掉任何一条边。
-       早期版本把贴边那一侧的圆角和边框都去掉了（想做成「从屏幕边缘
-       长出来」的样子），后来改成四角全圆，那么完整的轮廓才对。 */
+    body.dock-right #tab { left: 1px; }
+    body.dock-left  #tab { right: 1px; }
 
     #tab:hover { background: var(--hover-bg); }
 
-    /* --- CSS 三角形箭头，指向"拉出来的方向" --- */
+    /* --- CSS 三角形箭头，指向"拉出来的方向" ---
+       Python 在动画一开始就把 body 切到目标形态，所以箭头的出现/消失
+       走这个 120ms 的淡入淡出，正好叠在 160ms 的滑出/滑入上。 */
 
     .arrow {
       width: 0;
       height: 0;
       border: 6px solid transparent;
+      transition: opacity 120ms ease-out;
     }
 
-    /* 贴在右边 → 面板往左拉出来 → 箭头朝左 */
+    /* 贴在右边 → 面板往左滑出来 → 箭头朝左 */
     body.dock-right .arrow {
       border-right: 7px solid var(--text-dim);
       border-left: 0;
-      margin-right: 3px;
     }
 
-    /* 贴在左边 → 往右拉出来 → 箭头朝右 */
+    /* 贴在左边 → 往右滑出来 → 箭头朝右 */
     body.dock-left .arrow {
       border-left: 7px solid var(--text-dim);
       border-right: 0;
-      margin-left: 3px;
     }
 
-    /* 贴在上边 → 往下拉出来 → 箭头朝下 */
-    body.dock-top .arrow {
-      border-top: 7px solid var(--text-dim);
-      border-bottom: 0;
-      margin-top: 3px;
-    }
-
-    /* 贴在下边 → 往上拉出来 → 箭头朝上 */
-    body.dock-bottom .arrow {
-      border-bottom: 7px solid var(--text-dim);
-      border-top: 0;
-      margin-bottom: 3px;
-    }
-
-    /* 悬停时箭头亮一点，暗示可以点 */
+    /* 悬停时箭头亮一点，暗示可以点（跟主色调走，理由见 #remain） */
     #tab:hover .arrow {
-      border-right-color: #2563eb;
-      border-left-color: #2563eb;
-      border-top-color: #2563eb;
-      border-bottom-color: #2563eb;
+      border-right-color: var(--accent, #2563eb);
+      border-left-color: var(--accent, #2563eb);
+      border-top-color: var(--accent, #2563eb);
+      border-bottom-color: var(--accent, #2563eb);
     }
 
     /* 提醒时的跳动由 Python 调 window.pulse() 触发 */
@@ -354,6 +282,17 @@
       if (t === 'light' || t === 'dark') {
         document.documentElement.setAttribute('data-theme', t);
       }
+    };
+
+    /* 自定义主色调。Python 按当前深浅档把色值算好推过来（app/skin.py），
+       这里只管设上；值为 null（用户恢复默认）就摘掉，回到回落值。
+       ⚠️ 悬浮窗只吃主色调，不吃透明度和背景图 —— 窗口底色创建时就定死，
+       半透明卡片会在圆角处露出一圈实色（skin.py 开头有完整说明）。 */
+    window.__applyAccent = function (s) {
+      if (!s) return;
+      var root = document.documentElement.style;
+      if (s.accent) root.setProperty('--accent', s.accent);
+      else root.removeProperty('--accent');
     };
   </script>
 </head>

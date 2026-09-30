@@ -98,8 +98,9 @@ class CoursesMixin:
             end_node = int(p.get("endNode", 1))
         except (TypeError, ValueError):
             raise ValueError("节次必须是数字") from None
-        if not (1 <= start_node <= slots.MAX_NODE and 1 <= end_node <= slots.MAX_NODE):
-            raise ValueError(f"节次必须在 1–{slots.MAX_NODE} 之间")
+        limit = self.store.node_count
+        if not (1 <= start_node <= limit and 1 <= end_node <= limit):
+            raise ValueError(f"节次必须在 1–{limit} 之间（这所学校一天 {limit} 节）")
         if start_node > end_node:
             raise ValueError("起始节次不能比结束节次大")
 

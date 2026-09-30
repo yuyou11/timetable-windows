@@ -23,6 +23,7 @@ import unittest
 from pathlib import Path
 
 WEB = Path(__file__).resolve().parent.parent / "app" / "web"
+ROOT = Path(__file__).resolve().parent.parent
 
 
 class TestWindowBackgroundMatchesSurface(unittest.TestCase):
@@ -128,6 +129,61 @@ class TestThemeResolution(unittest.TestCase):
             self.assertEqual("system", _theme_or_system(bad), f"{bad!r} 没被拦下")
         for good in ("system", "light", "dark"):
             self.assertEqual(good, _theme_or_system(good))
+
+
+class TestTitlebarStaysWithAppTheme(unittest.TestCase):
+    """
+    标题栏必须**始终**跟应用主题，不能被 pywebview 抢走。
+
+    ## 这条测试防的是什么
+
+    pywebview 的 WinForms 后端在窗口构造时和**每次 UserPreferenceChanged**
+    （壁纸、IME、任务栏……任何系统设置变动都触发）都会按 **系统** 主题改写
+    标题栏深浅（winforms.py 的 update_title_bar_theme）。系统深色 + 应用浅色
+    时，只设一次的写法会被它随后盖掉 —— 用户看到的正是
+    「浅色主题下标题栏一直是黑的」。
+
+    对策（见 main._pin_titlebar_to_app_theme）：改写它的判定函数
+    `is_dark_theme`，让它按**应用**主题回答 —— 它每次改写都替我们写，
+    时序（构造时写、事件里重写）就无所谓了。事后补救是赢不了它的：
+    构造函数里就直接调了一次。
+    """
+
+    def test_patcher_is_installed_in_build_before_any_window(self):
+        src = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+        self.assertIn("_pin_titlebar_to_app_theme", src,
+                      "main.py 没有改写 pywebview 的标题栏判定")
+        self.assertIn("_APP_TITLEBAR_DARK", src,
+                      "缺少「应用主题的标题栏深浅」这个决定值")
+        # 改写必须发生在 build() 里（webview.start 创建窗口之前）——
+        # 构造函数里第一次就用上，事件重写更是全程用上
+        self.assertLess(
+            src.index("def build("),
+            src.index("_pin_titlebar_to_app_theme()", src.index("def build(")),
+            "build() 里必须调用 _pin_titlebar_to_app_theme()",
+        )
+        # 决定值必须先于改写安装定好，否则判定函数会走回退路径
+        self.assertLess(
+            src.index("_APP_TITLEBAR_DARK = resolve_theme("),
+            src.index("detail = _pin_titlebar_to_app_theme()"),
+            "要先定好应用主题的深浅，再安装判定改写",
+        )
+
+    def test_patch_has_a_fallback_when_pywebview_changes(self):
+        """
+        monkeypatch 第三方内部类，pywebview 升级改名就会失效 ——
+        必须有 hasattr 守卫和原判定保存，失效时退回「跟系统」而不是崩。
+        （目标是嵌套类 BrowserView.BrowserForm —— 窗体方法全在那层，
+        第一版 patch 到 BrowserView 本体上，hasattr 悄悄是 False，
+        整个改写静默没生效。）
+        """
+        src = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+        self.assertIn('getattr(view, "BrowserForm", None)', src,
+                      "patch 没有落到嵌套类 BrowserForm 上")
+        self.assertIn('hasattr(form, "is_dark_theme")', src,
+                      "patch 没有守卫 —— pywebview 改名后会直接崩")
+        self.assertIn("_original_is_dark_theme", src,
+                      "原判定没有存档 —— 回退路径无从谈起")
 
 
 if __name__ == "__main__":

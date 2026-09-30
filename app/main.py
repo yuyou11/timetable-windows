@@ -34,7 +34,7 @@ from typing import Optional
 
 import webview
 
-from . import dock, engine, slots, winutil
+from . import dock, engine, skin, slots, winutil
 from .api import Api
 # ⚠️ 下面这些「读系统环境」的工具函数已经搬到 app/screen.py，这里**再导出**一次。
 #
@@ -52,6 +52,7 @@ from .screen import (  # noqa: F401
     _bg_color,
     _titlebar_colors,
     is_dark_mode,
+    monitor_rect,
     resolve_theme,
     resource_path,
     screen_size,
@@ -62,7 +63,6 @@ from .store import Store
 from .tray import Tray
 
 APP_TITLE = "时间规划表"
-BALL_W, BALL_H = 244, 104       # 悬浮窗（常驻小卡片，不是圆球）
 TOAST_W, TOAST_H = 330, 108
 
 #: 等窗口真正出现的上限（秒）。见 `winutil.wait_for_window` 的说明 ——
@@ -99,6 +99,13 @@ def place_window(win, x: int, y: int, w: int, h: int,
                  atomic=None) -> None:
     """
     把窗口挪到 (x, y) 并改成 w × h。**先挪还是先缩，取决于这一帧是长大还是缩小。**
+
+    ## 悬浮窗已改为固定尺寸，这里对它只剩 move
+
+    悬浮窗窗口现在**从不 resize**（收起/展开 = 整窗平移，见 dock.py 开头的
+    说明），所以走这条路径时 w/h 恒等于上一帧，顺序规则自然不会触发。
+    函数保持原样：它还要服务别的调用形态，而 resize 路径留着也是兜底 ——
+    万一未来有谁恢复「改变尺寸」的做法，这里的坑位说明还在。
 
     ## 为什么顺序要紧
 
@@ -178,6 +185,77 @@ def _ease_out(t: float) -> float:
 
 
 # ============================================================
+#  标题栏主题：改写 pywebview 的判定，让它跟应用主题走
+# ============================================================
+
+#: 标题栏应该用深色还是浅色，build() 时按应用主题定（见 _pin_titlebar_to_app_theme）。
+#: None = 还没定。
+_APP_TITLEBAR_DARK: Optional[bool] = None
+
+#: pywebview 原本的系统主题判定，patch 时存下来，给「值还没定」的回退路径用
+_original_is_dark_theme = None
+
+
+def _pin_titlebar_to_app_theme() -> str:
+    """
+    把 pywebview 的「标题栏跟系统主题」改成「跟应用主题」。返回结果说明。
+
+    ## 为什么要 patch 第三方
+
+    pywebview 的 WinForms 后端（winforms.BrowserView）在**窗口构造函数里**
+    就调一次 update_title_bar_theme()，按 **系统** 主题改写标题栏深浅，
+    还在 UserPreferenceChanged 事件（壁纸、IME……任何系统设置变动都触发）
+    上注册了同一个改写器。应用侧「启动后自己再设一次」的写法赢不了这个时序 ——
+    系统深色 + 应用浅色时，标题栏被它反复抹成黑色（用户报的正是这个）。
+
+    所以直接改写它的**判定** `is_dark_theme()`：让它返回应用主题的深浅。
+    它原本的改写逻辑（写哪些 DWM 属性、构造时写、事件里重写）一概保留 ——
+    **写的极性对了，时序就无所谓了**。
+
+    ⚠️ 这是对第三方内部类的 monkeypatch，pywebview 升级改名就会失效 ——
+    所以有 getattr 守卫，失效时返回说明（调用方记日志），症状退回
+    「标题栏跟系统主题走」，程序照常能用。不整个替换
+    update_title_bar_theme 是因为那边还顺手写了窗口边框颜色（属性 38），
+    只换判定比照抄整段逻辑稳。
+
+    必须在 `webview.start()`（窗口真正创建）**之前**调用 ——
+    构造函数里就要用上改好的判定。
+
+    ⚠️ 目标是 **BrowserView.BrowserForm**：窗体方法全在 BrowserView 里
+    的嵌套类 BrowserForm 上，BrowserView 本体没有 is_dark_theme
+    （第一版 patch 到本体上，hasattr 悄悄是 False，整个改写静默没生效 ——
+    这也是「返回值必须可读、日志必须留」的又一例证）。
+    """
+    global _APP_TITLEBAR_DARK, _original_is_dark_theme
+    try:
+        from webview.platforms import winforms as _wf
+    except Exception as e:
+        return f"未启用（导入 winforms 失败：{type(e).__name__}: {e}）"
+
+    view = getattr(_wf, "BrowserView", None)
+    form = getattr(view, "BrowserForm", None) if view is not None else None
+    if form is None or not hasattr(form, "is_dark_theme"):
+        return "未启用（pywebview 没有 BrowserView.BrowserForm.is_dark_theme，版本变了？）"
+    if getattr(form, "is_dark_theme") is _app_is_dark:
+        return "已启用（重复调用，跳过）"
+
+    _original_is_dark_theme = form.is_dark_theme
+    form.is_dark_theme = _app_is_dark
+    return "已启用：标题栏深浅改由应用主题决定"
+
+
+def _app_is_dark(self) -> bool:
+    """顶替 pywebview 的 BrowserView.is_dark_theme —— 按应用主题回答"""
+    if _APP_TITLEBAR_DARK is None:
+        # 理论上到不了：build() 先于 webview.start 定好这个值。
+        # 真到不了就退回 pywebview 原判定（跟系统），别把标题栏搞没了。
+        if _original_is_dark_theme is not None:
+            return _original_is_dark_theme(self)
+        return False
+    return _APP_TITLEBAR_DARK
+
+
+# ============================================================
 #  应用
 # ============================================================
 
@@ -209,8 +287,11 @@ class App:
         self._ball_edge: Optional[str] = None      # None = 自由浮动
         self._ball_center: int = 0                 # 贴边时那条要保住的中线
         self._ball_collapsed: bool = False
-        self._ball_w: int = dock.CARD_W
-        self._ball_h: int = dock.CARD_H
+        # 窗口尺寸是**恒定**的（dock.WINDOW_W × WINDOW_H，永不 resize ——
+        # 这是「整窗滑出」方案的前提，见 dock.py 开头的说明）。
+        # 记在这里只是为了统一口径：所有几何调用都从这对状态拿尺寸。
+        self._ball_w: int = dock.WINDOW_W
+        self._ball_h: int = dock.WINDOW_H
         #: 自由浮动时的位置。**自己记着，不回读窗口。**
         #:
         #: 为什么不直接读 self.ball.x？因为**创建窗口后的短时间内它不可靠** ——
@@ -296,6 +377,14 @@ class App:
     def build(self) -> None:
         sw, sh = screen_size()
 
+        # 标题栏深浅改由**应用主题**决定（见 _pin_titlebar_to_app_theme 的说明 ——
+        # 必须在 webview.start 创建窗口之前钉上，构造函数里就要用上）。
+        global _APP_TITLEBAR_DARK
+        _APP_TITLEBAR_DARK = resolve_theme(self.store.theme) == "dark"
+        detail = _pin_titlebar_to_app_theme()
+        # 失败不拦着启动：症状退回「标题栏跟系统主题」，能用
+        self.api.log_error(f"[标题栏] 判定改写：{detail}")
+
         self.main = webview.create_window(
             winutil.TITLE_MAIN,
             str(resource_path("web", "index.html")),
@@ -303,8 +392,12 @@ class App:
             # 这里写的是**逻辑像素**，不要乘 DPI 系数 ——
             # pywebview 内部会自己换算。乘了就是双重缩放，
             # 窗口会大出一圈（实测要 1000 结果变成 1562）。详见 dock.py 开头。
-            width=1000,
-            height=720,
+            #
+            # 默认尺寸按「内容列 max-width 900px + 侧栏 208px 能完整展开」
+            # 给的（1000 宽时右侧只剩约 790px，900 的内容列被截着）；
+            # 小屏幕上钳回工作区内 —— 宁可小一点，也别开出超出屏幕的窗口。
+            width=min(1200, sw - 60),
+            height=min(840, sh - 100),
             min_size=(820, 560),
             background_color="#f5f6f8",
             text_select=False,
@@ -339,6 +432,19 @@ class App:
             background_color=_bg_color(self.store.theme),
         )
 
+        # 页面加载完成后再补推一次主题。_polish_chrome 里那次推送有竞态：
+        # 窗口句柄一出现它就跑，而页面可能还没解析到 __applyTheme，
+        # 推送会静默落空 —— 落空的窗口就只能跟着系统的 prefers-color-scheme
+        # 走，系统深色时就是一块深色卡片配浅色主窗口（用户撞到的）。
+        # 主窗口有 app.js boot() 的兜底，悬浮窗和提示条没有，所以这里把
+        # 主窗口和提示条都挂上（悬浮窗的在 _create_ball 里挂）：
+        # loaded 每次触发都按设置推一遍，幂等无害。
+        self.main.events.loaded += self._apply_theme
+        self.toast.events.loaded += self._apply_theme
+        # 自定义外观同理：polish 里推一次 + loaded 再兜一次（幂等）。
+        self.main.events.loaded += self._push_skin
+        self.toast.events.loaded += self._push_skin
+
         # ---- 托盘图标 ----
         #
         # 这是「永远都在的入口」：不管悬浮窗被隐藏、还是主窗口被关掉，
@@ -359,6 +465,61 @@ class App:
             # 只是少了个兜底入口
             self.tray = None
 
+        # ---- 主窗口/提示条的「外观整形」+ 标题栏配色 ----
+        #
+        # **与悬浮窗无关，悬浮窗关着也要做** —— 以前这套塞在悬浮窗的
+        # polish 线程里，悬浮窗在设置里关掉时整段都不会跑，
+        # 标题栏配色、提示条样式就全部没人管了（标题栏发黑的成因之一）。
+        # 见 _polish_chrome。
+        threading.Thread(target=self._polish_chrome, daemon=True,
+                         name="chrome-polish").start()
+
+    def _polish_chrome(self) -> None:
+        """
+        主窗口标题栏 + 提示条外观 + 主题推送。**与悬浮窗无关，总是要跑。**
+
+        为什么从悬浮窗的 polish 里拆出来：这套东西原来塞在 `_create_ball`
+        的 polish 线程里 —— 悬浮窗关掉时 `_create_ball` 整个不走，
+        标题栏和提示条就没人管了。窗口整形必须等 HWND 出现，
+        所以还是等一轮窗口，只是等的东西和悬浮窗解耦。
+        """
+        bg, fg = _titlebar_colors(self.store.theme)
+        main_hwnd = winutil.wait_for_window(winutil.TITLE_MAIN, HWND_TIMEOUT)
+        detail = winutil.set_titlebar_theme(
+            main_hwnd, bg, fg, resolve_theme(self.store.theme) == "dark")
+        # 失败**不能**默默吞掉。这个功能坏了的表现是「就是不变、没有任何
+        # 报错」，那种问题最难查 —— 所以留一行，翻日志就知道走到哪一步了。
+        self.api.log_error(
+            f"[标题栏] {detail}（hwnd={main_hwnd}, 主题={self.store.theme}, "
+            f"解析后={resolve_theme(self.store.theme)}, 目标={bg}/{fg}）"
+        )
+
+        # ⚠️ 上面这次设置本身没问题，但**单靠它赢不了时序**：
+        #    pywebview 在窗口构造函数里就直接按系统主题改写一次，
+        #    还在 UserPreferenceChanged 事件上注册了改写器 —— 我们的
+        #    事件处理器注册得比它晚或早都不稳。真正的对策在
+        #    `_pin_titlebar_to_app_theme`（build() 里调用）：把 pywebview
+        #    的判定函数改成按**应用主题**回答，它每次改写都替我们写。
+
+        # ---- 提示条 ----
+        toast_ready = bool(winutil.wait_for_window(winutil.TITLE_TOAST, HWND_TIMEOUT))
+        if toast_ready:
+            winutil.make_tool_window(winutil.TITLE_TOAST)
+            winutil.disable_shadow(winutil.TITLE_TOAST)
+            # 提示条离屏幕边缘有 18px / 100px 的余量，永远不会贴边，
+            # 所以它不需要 _apply_ball_geometry 那种「按位置决定」的逻辑
+            winutil.set_rounded_corners(winutil.TITLE_TOAST, True)
+        else:
+            self.api.log_error(
+                f"等提示条 HWND 超时（{HWND_TIMEOUT:.0f} 秒）：窗口样式没设上"
+            )
+
+        # 主题的强制档现在推一次；`boot()` 那边还会再推一次兜底
+        # （这里可能赶在页面加载完成之前，那一次会被 window.__applyTheme
+        # 还没定义而静默跳过 —— 所以不能只有这一处）。
+        self._apply_theme()
+        self._push_skin()
+
     def _create_ball(self, sw: int, sh: int) -> None:
         if self.ball is not None:
             return
@@ -367,6 +528,7 @@ class App:
         # 上次的停靠状态优先。用户在右边缩起来的卡片，下次打开应该还在那，
         # 每次都回到默认位置会让人反复调整，很烦。
         area = work_area()
+        monitor = monitor_rect()
         saved_edge = self.store.ball_edge
 
         if saved_edge:
@@ -377,17 +539,19 @@ class App:
             # 压不压取决于「启动时光标是不是恰好压在悬浮窗上」，
             # 而那要等窗口真正摆好位置才知道，所以判断挪到 _polish 里。
             self._ball_suppress_expand = False
-            x, y, w, h = dock.docked_geometry(
-                saved_edge, self._ball_center, area, True
+            # 收起态：大部分窗口在屏幕外，只留把手那条（dock.slide_geometry）
+            x, y, w, h = dock.slide_geometry(
+                saved_edge, self._ball_center, area, monitor, True
             )
         else:
             self._ball_edge = None
             self._ball_collapsed = False
             px, py = self.store.ball_pos
             if px < 0:
-                px = area.right - dock.CARD_W - 14
-                py = area.bottom - dock.CARD_H - 14
-            x, y, w, h = dock.clamp_to_area(px, py, dock.CARD_W, dock.CARD_H, area)
+                px = area.right - dock.WINDOW_W - 14
+                py = area.bottom - dock.WINDOW_H - 14
+            x, y = dock.clamp_free(px, py, area)
+            w, h = dock.WINDOW_W, dock.WINDOW_H
 
         # ⚠️ 这四个都要赋值，一个都不能漏。
         #
@@ -425,9 +589,9 @@ class App:
             x=x,
             y=y,
             # ⚠️ 这一行不能省。pywebview 的 min_size 默认是 (200, 100)，
-            # 不放开的话窗口永远缩不到 200 以下 —— 「缩成一条边」根本做不到。
-            # 实测就是这么发现的：resize(24, 72) 出来还是 200×100。
-            min_size=(dock.TAB_SHORT, dock.TAB_SHORT),
+            # 不放开的话窗口建不到 200 以下。现在窗口尺寸固定不会再 resize，
+            # 这条只防 pywebview 内部逻辑拿默认值捣乱，留着无害。
+            min_size=(dock.SLIDE_W, dock.SLIDE_W),
             frameless=True,
             on_top=True,
             easy_drag=False,        # 拖动自己实现，见 ball.js（用 easy_drag 会让按钮点不动）
@@ -438,6 +602,10 @@ class App:
         # 页面加载完再把布局推过去。
         # 创建窗口时页面还没加载，那时候 evaluate_js 会石沉大海。
         self.ball.events.loaded += self._push_ball_layout
+        # 主题同理：polish 里那一次可能赶在页面加载完成之前（竞态说明见
+        # build() 里 main/toast 的订阅处），这里在页面加载完再补推一次。
+        self.ball.events.loaded += self._apply_theme
+        self.ball.events.loaded += self._push_skin
 
         # ⚠️ 必须订阅 closing，否则**外部**（任务栏右键 → 关闭、Alt+F4）
         # 能把这个窗口真的销毁掉，之后再也唤不回来。
@@ -463,6 +631,9 @@ class App:
         # 再定一次悬浮窗的圆角，那才是最终该生效的那个值。
         # （第一版把几何放在最前面，圆角刚设好就被覆盖，白改。）
         def _polish() -> None:
+            # 悬浮窗专属的外观整形。主窗口标题栏、提示条样式、主题推送
+            # 在 _polish_chrome 里（与悬浮窗无关，关着也要做）。
+            #
             # ⚠️ 这里原来是 `time.sleep(0.9)` 硬等。
             #
             # 实测（见 tools/exp_toolwin.py）：窗口大约 **0.80 秒**才出现，
@@ -474,26 +645,11 @@ class App:
             #
             # 换成轮询之后就没有这个窗口期了：窗口一出现就立刻返回，
             # 慢机器上多等一会儿也不会失败。
-            # 标题栏跟主题走 —— 主窗口是唯一带系统标题栏的（另两个无边框）。
-            # 页面换了色、标题栏没换，看着就是上下两截。
-            # 这里换一次就够：主题本来就是「重启后生效」。
             #
-            # ⚠️ **必须先等主窗口真正建出来**。`create_window()` 只是登记一下，
-            # 真正的 WinForms 窗口要等 `webview.start()` 才出现；而 `_polish`
-            # 这个线程是在 `build()` 末尾起的，那一刻一个窗口都还没有。
-            # 不等就调 → 拿不到句柄 → **静默失败，表现就是「标题栏死活不变」**。
-            # （第一版就是这么写的，白改一次。）
-            bg, fg = _titlebar_colors(self.store.theme)
-            main_hwnd = winutil.wait_for_window(winutil.TITLE_MAIN, HWND_TIMEOUT)
-            detail = winutil.set_titlebar_theme(
-                main_hwnd, bg, fg, resolve_theme(self.store.theme) == "dark")
-            # 失败**不能**默默吞掉。这个功能坏了的表现是「就是不变、没有任何
-            # 报错」，那种问题最难查 —— 所以留一行，翻日志就知道走到哪一步了。
-            self.api.log_error(
-                f"[标题栏] {detail}（hwnd={main_hwnd}, 主题={self.store.theme}, "
-                f"解析后={resolve_theme(self.store.theme)}, 目标={bg}/{fg}）"
-            )
-
+            # ⚠️ **必须先等窗口真正建出来**。`create_window()` 只是登记一下，
+            # 真正的 WinForms 窗口要等 `webview.start()` 才出现；而这个线程
+            # 在 `_create_ball` 末尾就起了，那一刻一个窗口都还没有。
+            #
             # 下面两句是故意写成两句的：
             #   第一句拿 HWND（落位要用，见 _set_ball_rect）；
             #   第二句**那一行的写法被 tests/test_ball_ui.py 用正则钉住**
@@ -502,7 +658,6 @@ class App:
             #   当场变红。窗口这时一定在，第二次是即时返回，代价可以忽略。
             self._ball_hwnd = winutil.wait_for_window(winutil.TITLE_BALL, HWND_TIMEOUT)
             ball_ready = bool(winutil.wait_for_window(winutil.TITLE_BALL, HWND_TIMEOUT))
-            toast_ready = bool(winutil.wait_for_window(winutil.TITLE_TOAST, HWND_TIMEOUT))
 
             # 失败必须留下痕迹。原来是「找不到就当没这回事」，于是任务栏上
             # 多出来的按钮查无实据 —— 和 README 第 4.9 条（_apply_ball_geometry
@@ -513,27 +668,11 @@ class App:
                     f"等悬浮窗 HWND 超时（{HWND_TIMEOUT:.0f} 秒）："
                     f"WS_EX_TOOLWINDOW 没设上，它可能会出现在任务栏里"
                 )
-            if not toast_ready:
-                self.api.log_error(
-                    f"等提示条 HWND 超时（{HWND_TIMEOUT:.0f} 秒）：窗口样式没设上"
-                )
 
             # ⚠️ 顺序有讲究，不要随手调换（见上面那段顺序说明）。
             if ball_ready:
                 winutil.make_tool_window(winutil.TITLE_BALL)
                 winutil.disable_shadow(winutil.TITLE_BALL)
-
-            if toast_ready:
-                winutil.make_tool_window(winutil.TITLE_TOAST)
-                winutil.disable_shadow(winutil.TITLE_TOAST)
-                # 提示条离屏幕边缘有 18px / 100px 的余量，永远不会贴边，
-                # 所以它不需要 _apply_ball_geometry 那种「按位置决定」的逻辑
-                winutil.set_rounded_corners(winutil.TITLE_TOAST, True)
-
-            # 主题的强制档现在推一次；`boot()` 那边还会再推一次兜底
-            # （这里可能赶在页面加载完成之前，那一次会被 window.__applyTheme
-            # 还没定义而静默跳过 —— 所以不能只有这一处）。
-            self._apply_theme()
 
             if not ball_ready:
                 return
@@ -627,14 +766,15 @@ class App:
             return
 
         area = work_area()
+        monitor = monitor_rect()
 
         if self._ball_edge is None:
-            x, y, w, h = dock.clamp_to_area(
-                self._ball_x, self._ball_y, dock.CARD_W, dock.CARD_H, area
-            )
+            x, y = dock.clamp_free(self._ball_x, self._ball_y, area)
+            w, h = dock.WINDOW_W, dock.WINDOW_H
         else:
-            x, y, w, h = dock.docked_geometry(
-                self._ball_edge, self._ball_center, area, self._ball_collapsed
+            x, y, w, h = dock.slide_geometry(
+                self._ball_edge, self._ball_center, area, monitor,
+                self._ball_collapsed
             )
 
         # 先把「改之前的尺寸」留在手里 —— place_window 要靠它判断这一帧
@@ -752,7 +892,7 @@ class App:
 
     def _animate_ball(self, target: float) -> None:
         """
-        把悬浮窗从**当前进度**动画到 [target]（0.0 = 卡片，1.0 = 小方框）。
+        把悬浮窗从**当前进度**动画到 [target]（0.0 = 展开，1.0 = 收起）。
 
         跑在一个 daemon 线程里：整个过程要 160ms，不能占着调用它的那条线程
         （那些是 pywebview 的桥接回调线程，占住它们会把界面卡住）。
@@ -767,12 +907,12 @@ class App:
 
         2. **最后一帧要用精确值收口**，而不是"循环跑完就完事"。
            逐帧插值会累积浮点误差，收口时调用一次即时路径，
-           保证最终尺寸就是 `dock.docked_geometry` 算出来的那个整数，
+           保证最终位置就是 `dock.slide_geometry` 算出来的那个整数，
            一个像素都不差。
 
         3. **中途被打断就从当前进度接着走。** 起点取 `self._ball_progress`
            而不是 0 或 1，这样"鼠标移出去又马上移回来"不会让窗口
-           先跳回小方框再重新长大。
+           先跳回把手条再重新滑出来。
         """
         if self.ball is None or self._ball_edge is None:
             return
@@ -784,17 +924,18 @@ class App:
         edge = self._ball_edge
         center = self._ball_center
 
-        # 目标方向：1.0 表示正在收起，0.0 表示正在展开。
-        # 网页那边靠它决定是"淡出卡片内容"还是"淡入"。
-        collapsing = target > start
+        # 动画只有 160ms，屏幕基准一次算好就够了（每帧去问系统白费 syscall）
+        area = work_area()
+        monitor = monitor_rect()
 
-        # 先把网页切到「动画中」的样子：强制卡片布局（面板必须一直可见，
-        # 否则一开始就没东西可淡出），并按方向设置淡入/淡出。
-        self._eval_js(
-            self.ball,
-            f"window.ballAnim && window.ballAnim('{edge}', "
-            f"{'true' if collapsing else 'false'})",
-        )
+        # 一开始就把网页切到**目标**形态。
+        #
+        # 旧版这里还会往页面注入一个「动画中」的 JS 钩子：动画期间强制卡片
+        # 布局、内容按方向淡出 —— 那是为了遮「逐帧 resize 把内容挤扁」的丑。
+        # 新版窗口永不 resize，内容从头到尾完整渲染，整套淡出机制都删了；
+        # body 的 class 直接切到终点态，露出条上的箭头由 CSS 自己的
+        # 短过渡淡入淡出。
+        self._push_ball_layout()
 
         def _run() -> None:
             total_s = BALL_ANIM_MS / 1000.0
@@ -809,14 +950,14 @@ class App:
                 progress = start + (target - start) * t
 
                 try:
-                    x, y, w, h = dock.tween_docked_geometry(
-                        edge, center, work_area(), progress
+                    x, y, w, h = dock.tween_slide(
+                        edge, center, area, monitor, progress
                     )
                 except Exception:
                     return
 
-                # 和 _apply_ball_geometry 里一样：改之前的尺寸要先留下来，
-                # place_window 靠它决定先挪还是先缩。
+                # place_window 保持原样调用：窗口尺寸恒定，resize 等于没调，
+                # 顺序规则自然不会触发（它的用武之地只剩概念上的兜底）。
                 prev_x, prev_y, prev_w, prev_h = (
                     self._ball_x, self._ball_y, self._ball_w, self._ball_h)
                 self._ball_progress = progress
@@ -833,10 +974,9 @@ class App:
 
                 # 按**真实时间轴**对齐，而不是每帧固定睡 10ms。
                 #
-                # 每帧的 resize+move 本身要花 1–3ms（跨进程调用，实测），
-                # 固定睡 10ms 的话一帧实际是 11–13ms，16 帧下来
-                # 总时长会从 160ms 涨到将近 200ms —— 而网页那边的淡出
-                # 是按 160ms 走的（CSS 过渡），两边就对不上了。
+                # 每帧的 move 本身要花 1–3ms（跨进程调用，实测；旧版带 resize
+                # 时也一样），固定睡 10ms 的话一帧实际是 11–13ms，16 帧下来
+                # 总时长会从 160ms 涨到将近 200ms。
                 #
                 # 所以这里算「离这一帧该出现的时间点还差多少」，只睡差额。
                 # 机器快就睡得多、慢就睡得少，总时长始终是 BALL_ANIM_MS。
@@ -889,7 +1029,7 @@ class App:
         )
 
     def _push_ball_layout(self) -> None:
-        """告诉网页该显示「展开的卡片」还是「收起的小方框」"""
+        """告诉网页该显示「展开的卡片」还是「收起态（露出条上带箭头）」"""
         edge = self._ball_edge or ""
         collapsed = "true" if (self._ball_edge and self._ball_collapsed) else "false"
         self._eval_js(self.ball, f"applyDock('{edge}', {collapsed})")
@@ -1069,8 +1209,8 @@ class App:
         # 于是 WebView2 会补发一次 mouseleave，前端 380ms 后回调到这里。
         # 如果只挡 _apply_ball_geometry 不挡这里，`_ball_collapsed` 会偷偷翻成
         # True 而几何没跟着变 —— 等用户在设置里把悬浮窗重新打开，
-        # 就会看到一个 244×104 的窗口里画着那张「收起的小方框」，
-        # 状态和实际尺寸对不上。
+        # 就会看到一个停在展开位置的全尺寸窗口，配着「已收起」的状态，
+        # 状态和实际位置对不上。
         #
         # 一句话：**关掉之后，这个东西就当不存在。**
         if not self.store.ball_enabled:
@@ -1141,13 +1281,15 @@ class App:
 
     def _ball_move(self, dx: float, dy: float) -> dict:
         """
-        拖动中：挪窗口，但**不让它跑出屏幕**。
+        拖动中：挪窗口，但**不让卡片跑出屏幕**。
 
         用户反馈「拖到右边之后还能继续往右拖」—— 拖出去就看不见了，
         只剩任务栏里一个按钮，很容易以为程序坏了。
 
-        所以这里把目标位置夹在工作区内：**窗口的四条边永远不越界**。
-        贴边的时候正好停在边缘上（这也是我们想要的停靠位置），
+        所以这里把目标位置夹住：**内容区（卡片本体）永远不越出工作区**，
+        两侧的空白把手区允许悬出 SLIDE_W（见 dock.clamp_free 的说明 ——
+        按整窗夹的话，从展开停靠位起拖会先跳一下）。
+        贴边的时候内容正好停在边缘上（这也是我们想要的停靠位置），
         但再也推不出去了。
         """
         if self.ball is None:
@@ -1156,9 +1298,7 @@ class App:
         area = work_area()
         x, y = self._ball_x, self._ball_y
 
-        nx, ny, _, _ = dock.clamp_to_area(
-            x + dx, y + dy, self._ball_w, self._ball_h, area
-        )
+        nx, ny = dock.clamp_free(x + dx, y + dy, area)
 
         # 位置没变就别调 move 了 —— 拖动时这个函数每秒被调几十次，
         # 每次都是一次跨进程调用，能省则省
@@ -1178,7 +1318,7 @@ class App:
 
         如果它正处于「贴边收起」状态，**先弹出来再拖**。
 
-        为什么？收起时窗口只有 26×76，是一个几乎看不见的小条。
+        为什么？收起时屏幕上只剩一条 26px 宽的把手。
         用户按住的其实是那个小条，拖起来手感很怪 ——
         而且拖到中间松手之前，他一直看到的是一条细线，
         很容易以为「拖没了」。
@@ -1277,6 +1417,10 @@ class App:
 
         # 通知主窗口刷新（悬浮窗那边可能改了设置）
         self._eval_js(self.main, "window.refreshAll && window.refreshAll()")
+        # 外观类的设置也从这里走（set_accent / set_card_opacity /
+        # choose_background_image 都会触发 _notify_settings_changed）——
+        # 这就是它们「立即生效」的那一步。重复推幂等无害。
+        self._push_skin()
 
     def _fire_reminder(self, moment, when_text: str) -> None:
         """提醒到点：响一声 + 弹出提示条"""
@@ -1329,6 +1473,41 @@ class App:
             except Exception:
                 # 一个窗口失败不该连累另外两个 —— 分开 try
                 self.api.log_error(f"推主题失败：{theme}")
+
+    def _push_skin(self) -> None:
+        """
+        把自定义外观推给各窗口。设置里改主色调 / 卡片透明度 / 背景图时
+        （以及启动、页面加载完成时）都会走到这里。
+
+        · 主窗口推**全套**（主色调 + 半透明底色，见 skin.main_payload）——
+          它是矩形窗口，页面铺满客户区，半透明没有底色可露。
+        · 悬浮窗只推**主色调**。它的窗口底色创建时就定死了，透明卡片
+          会在圆角处露出一圈实色（skin.py 开头有完整说明）；
+        · 提示条连主色调都没用上（配色只有 surface/text/danger），不用推。
+
+        背景图不走这里：它是几 MB 的 data URL，由前端在 boot() 和设置变更后
+        用 `get_background_image` 自己来拉 —— 推大块数据过桥不划算，
+        而且只有主窗口需要它。
+
+        ⚠️ 值按**启动时解析的深浅档**算（和 _apply_theme 同一约束）：
+        「跟随系统」时系统中途换深浅档，覆盖色不会跟着重算 ——
+        主题档本来就要重启才整套生效，这里保持同一口径。
+        """
+        import json
+
+        theme = resolve_theme(self.store.theme)
+        payload = json.dumps(skin.main_payload(
+            theme, self.store.accent,
+            self.store.card_opacity, self.store.bg_image,
+            self.store.text_color, self.store.sidebar_opacity,
+        ))
+        self._eval_js(self.main,
+                      f"window.__applySkin && window.__applySkin({payload})")
+
+        if self.ball is not None:
+            accent = json.dumps(skin.accent_payload(self.store.accent, theme))
+            self._eval_js(self.ball,
+                          f"window.__applyAccent && window.__applyAccent({accent})")
 
     def _show_toast(self, title: str, body: str) -> None:
         if self.toast is None:
@@ -1410,8 +1589,8 @@ class App:
 
 
 def main() -> int:
-    # 单实例检查用不着 —— 同时开两个也不会互相破坏数据，
-    # 顶多是两个悬浮窗。为这点小事引入文件锁不值得。
+    # 单实例检测不在这里 —— 它在 run.py 的最前面（app/instance.py）：
+    # 越早拦越好，第二个实例不该把 webview 这一套都拉起来才发现重复。
     App().run()
     return 0
 

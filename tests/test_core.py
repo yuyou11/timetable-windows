@@ -965,5 +965,109 @@ def _sig_blocks(blocks):
     ]
 
 
+class TestPeriods(unittest.TestCase):
+    """节数信息（periods）：学校每天「上午、下午、晚上」各有几节。
+
+    ## 为什么需要它
+
+    网格以前把行**写死**成五对大课 [(1,2),(3,4),(5,6),(7,8),(9,10)]，
+    且课程匹配要求 start_node 恰好等于行首 —— 别的学校课不成对时
+    （单节的课、跨在 2-3 节上的课），一行都对不上，课表页**整门课不显示**。
+
+    节数信息让导入文件声明自己学校的节次结构；一天的小节数 = 各位之和，
+    **不再写死 10** —— 默认 "442"（上午 4、下午 4、晚上 2）与内置时间表
+    一一对应；"445"（13 节）的第 11-13 节按晚课节奏外推时间（slots.py）；
+    "441"（9 节）= 一天 9 节、没有第 10 节。上限由「一天」决定：
+    外推到第 14 节 23:55 下课为止。老文件没有这个字段按默认处理 ——
+    向下兼容。
+    """
+
+    def test_normalize_accepts_valid_forms(self):
+        for raw, want in [
+            ("441", "441"),
+            ("442", "442"),
+            (" 445 ", "445"),       # 带空白；和 13 > 10 也合法（外推时间槽）
+            ("44", "44"),           # 两个时段（没有晚上）
+            ("22222", "22222"),     # 五节大课（每节 2 小节）
+            ("1111111111", "1111111111"),   # 十节独立小节
+            ("11111111111", "11111111111"), # 11 节独立小节
+            ("4441", "4441"),       # 四个时段：4+4+4+1 = 13
+        ]:
+            self.assertEqual(want, format_spec.normalize_periods(raw), raw)
+
+    def test_normalize_rejects_garbage(self):
+        for bad in ("", "021", "44a", "四四一", 441, None, ["441"],
+                    "456",                 # 4+5+6 = 15 > 14，一天排不下
+                    "9999999999",          # 和 45
+                    "111111111111111"):    # 15 位，超过一天能容纳的段数
+            self.assertIsNone(format_spec.normalize_periods(bad), repr(bad))
+
+    def test_node_count_follows_periods(self):
+        self.assertEqual(10, format_spec.node_count("442"))
+        self.assertEqual(13, format_spec.node_count("445"))
+        self.assertEqual(9, format_spec.node_count("441"))
+
+    def test_parse_takes_optional_periods(self):
+        text = ('{"format":"timetable","version":2,"periods":"442",'
+                '"courses":[{"name":"晚课","dayOfWeek":1,"nodes":[10,10],"weeks":"*"}]}')
+        p = format_spec.parse(text)
+        self.assertEqual("442", p.periods)
+        self.assertEqual([], p.warnings)
+
+    def test_parse_without_periods_is_none(self):
+        text = '{"format":"timetable","version":2,"courses":[{"name":"高数","dayOfWeek":1,"nodes":[1,2],"weeks":"*"}]}'
+        self.assertIsNone(format_spec.parse(text).periods)
+
+    def test_parse_rejects_bad_periods_loudly(self):
+        text = ('{"format":"timetable","version":2,"periods":"440",'
+                '"courses":[{"name":"高数","dayOfWeek":1,"nodes":[1,2],"weeks":"*"}]}')
+        with self.assertRaises(FormatError) as cm:
+            format_spec.parse(text)
+        self.assertIn("periods", str(cm.exception))
+        self.assertIn("每位 1-9", str(cm.exception))   # 报错里写清楚正确写法
+
+    def test_parse_rejects_structure_that_does_not_fit_a_day(self):
+        """和超过 14：45 分钟一节从 08:30 排起，一天最多容纳 14 节"""
+        text = ('{"format":"timetable","version":2,"periods":"456",'
+                '"courses":[{"name":"高数","dayOfWeek":1,"nodes":[1,2],"weeks":"*"}]}')
+        with self.assertRaises(FormatError) as cm:
+            format_spec.parse(text)
+        self.assertIn("periods", str(cm.exception))
+        self.assertIn("14", str(cm.exception))   # 报错里写清楚上限
+
+    def test_course_nodes_must_fit_the_declared_structure(self):
+        """课程节次的合法范围 = 文件自己声明的节数 —— 441（9 节）下
+        第 10 节的课不存在，必须报错而不是静默消失"""
+        text = ('{"format":"timetable","version":2,"periods":"441",'
+                '"courses":[{"name":"晚课","dayOfWeek":1,"nodes":[10,10],"weeks":"*"}]}')
+        with self.assertRaises(FormatError) as cm:
+            format_spec.parse(text)
+        self.assertIn("1–9", str(cm.exception))
+
+    def test_course_nodes_beyond_ten_are_fine_with_a_bigger_structure(self):
+        """第 12-13 节的课在 "445"（13 节）下完全合法 —— 以前一律拒绝"""
+        text = ('{"format":"timetable","version":2,"periods":"445",'
+                '"courses":[{"name":"晚加课","dayOfWeek":1,"nodes":[12,13],"weeks":"*"}]}')
+        p = format_spec.parse(text)
+        self.assertEqual((12, 13), (p.courses[0].start_node, p.courses[0].end_node))
+
+    def test_serialize_omits_default_periods(self):
+        """默认结构不写出来 —— 与手机版导出的文件有逐字节同源约定。"""
+        text = format_spec.serialize("测试", TERM_START, 19, [])
+        self.assertNotIn("periods", text)
+
+    def test_serialize_writes_custom_periods(self):
+        text = format_spec.serialize("测试", TERM_START, 19, [], None, None, "441")
+        self.assertIn('"periods": "441"', text)
+        # 往返：写出去的能原样读回来
+        self.assertEqual("441", format_spec.parse(text).periods)
+
+    def test_period_only_file_is_still_rejected(self):
+        """只有节数信息、什么内容都没有的文件没有导入意义 —— 别放行"""
+        text = '{"format":"timetable","version":2,"periods":"442"}'
+        with self.assertRaises(FormatError):
+            format_spec.parse(text)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

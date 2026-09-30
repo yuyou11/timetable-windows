@@ -1,6 +1,6 @@
 """
 Verify the DRAG-TO-EDGE docking animation -- the specific thing that was asked
-for: "drag the ball to the edge and it shrinks into the tab".
+for: "drag the ball to the edge and it slides out of sight, leaving the handle".
 
 This is a different code path from hover expand/collapse (it goes through
 _ball_drag_end), so the hover probe passing does NOT prove this one animates.
@@ -9,7 +9,9 @@ Sequence:
   1. seed a FREE-FLOATING ball (ball_edge empty) somewhere in the middle
   2. launch, hover the card so it is expanded
   3. mousedown on the card, drag toward the right edge, mouseup near it
-  4. sample the window width -> it should ramp 305 -> ... -> 32, not jump
+  4. sample the window LEFT edge -> x should ramp toward its docked value,
+     not jump. (Since the fixed-size slide rework the window never resizes:
+     width stays constant all the way, the motion is a pure x ramp.)
 
 Usage: python tools/probe_dock_anim.py [--src] [path-to-exe]
 
@@ -35,8 +37,8 @@ SHOT_DIR = ROOT / "build-logs" / "shots"
 
 BALL_TITLE = "时间规划表悬浮窗"
 SCALE = 1.25
-CARD_PHYS_W = round(244 * SCALE)      # 305
-TAB_PHYS_W = round(26 * SCALE)        # 33
+WINDOW_PHYS_W = round(270 * SCALE)    # fixed window width, logical 270
+HANDLE_PHYS_W = round(13 * SCALE)     # exposed handle width, logical 13
 
 user32 = ctypes.windll.user32
 MOUSEEVENTF_LEFTDOWN = 0x0002
@@ -60,11 +62,6 @@ def rect_of(hwnd):
     r = RECT()
     user32.GetWindowRect(ctypes.wintypes.HWND(hwnd), ctypes.byref(r))
     return r
-
-
-def width_of(hwnd):
-    r = rect_of(hwnd)
-    return r.right - r.left
 
 
 def move_to(x, y):
@@ -194,27 +191,42 @@ def main():
         log("  releasing at x=" + str(int(target_x)))
         user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
-        # ---- sample the width right after release ----
-        widths = []
+        # ---- sample the LEFT edge right after release ----
+        # (fixed-size slide: width must stay constant, x is what ramps)
+        xs = []
+        widths = set()
         t_end = time.perf_counter() + 0.9
         while time.perf_counter() < t_end:
-            wv = width_of(hwnd)
-            if not widths or widths[-1] != wv:
-                widths.append(wv)
+            r = rect_of(hwnd)
+            wv = r.right - r.left
+            widths.add(wv)
+            xv = r.left
+            if not xs or xs[-1] != xv:
+                xs.append(xv)
 
-        log("  widths after release: " + " -> ".join(str(v) for v in widths))
+        log("  widths seen: " + (", ".join(str(v) for v in sorted(widths))
+                                 or "none"))
+        log("  lefts after release: " + " -> ".join(str(v) for v in xs))
         shot("01_after_release")
 
-        intermediate = [v for v in set(widths) if TAB_PHYS_W + 3 < v < CARD_PHYS_W - 3]
+        expected_final = work_area_right_physical() - HANDLE_PHYS_W
+        lo, hi = min(xs), max(xs)
+        intermediate = [v for v in set(xs)
+                        if min(lo, expected_final) + 3 < v < max(hi, expected_final) - 3]
         log("")
         log("================ SUMMARY ================")
-        log("distinct widths : " + str(len(set(widths))))
+        log("distinct widths : " + str(len(widths))
+            + " (must be 1 -- window never resizes)")
+        log("distinct lefts  : " + str(len(set(xs))))
         log("intermediate    : " + str(len(intermediate)) + " of them")
-        log("final width     : " + str(width_of(hwnd)) + "px (tab expected "
-            + str(TAB_PHYS_W) + "px)")
+        log("final left      : " + str(xs[-1]) + "px (docked handle expected "
+            + str(expected_final) + "px)")
         log("")
+        if len(widths) != 1:
+            log("FAIL: the window resized during the slide -- it must not.")
+            return 1
         if len(intermediate) >= 3:
-            log("PASS: the dock-on-release animated (ramp, not a jump).")
+            log("PASS: the dock-on-release animated (x ramp, not a jump).")
             return 0
         log("FAIL: the dock-on-release snapped instead of animating.")
         return 1

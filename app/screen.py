@@ -29,9 +29,9 @@
 
 ## 单位约定
 
-`work_area()` / `screen_size()` 返回的都是**逻辑像素**。
-唯一的物理→逻辑换算发生在 `work_area()` 内部，用的是 `ui_scale()` ——
-那是它**唯一**该被用到的地方（理由见 `ui_scale` 的 docstring）。
+`work_area()` / `monitor_rect()` / `screen_size()` 返回的都是**逻辑像素**。
+物理→逻辑换算只发生在 `work_area()` / `monitor_rect()` 内部，用的是
+`ui_scale()` —— 那是它**唯一**该被用到的地方（理由见 `ui_scale` 的 docstring）。
 """
 
 from __future__ import annotations
@@ -268,6 +268,34 @@ def _work_area_physical() -> dock.Area:
         )
     except Exception:
         return dock.default_area()
+
+
+def monitor_rect() -> dock.Area:
+    """
+    主显示器的**整块屏幕**边界（含任务栏占的那条），单位是**逻辑像素**。
+
+    为什么悬浮窗需要它：收起态要把窗口的大部分**滑出屏幕之外**，
+    「屏幕之外」的基准是显示器边界，不是工作区边界 —— 任务栏停在
+    左/右两侧时两者差一条任务栏的宽度，用工作区当滑出终点会让
+    整张卡片压在任务栏上（dock.slide_geometry 里有详细说明）。
+    展开**落位**仍然用 work_area()，两个基准各管各的。
+
+    主显示器的原点恒为 (0,0)（虚拟屏幕坐标系），所以只要宽高就够了。
+    `GetSystemMetrics` 返回的是**物理**像素（run.py 声明了 DPI 感知），
+    和 work_area() 一样要除一次缩放系数。
+    """
+    try:
+        scale = ui_scale() or 1.0
+        w = ctypes.windll.user32.GetSystemMetrics(0)   # SM_CXSCREEN
+        h = ctypes.windll.user32.GetSystemMetrics(1)   # SM_CYSCREEN
+        if w > 200 and h > 200:
+            return dock.Area(0, 0, round(w / scale), round(h / scale))
+    except Exception:
+        pass
+
+    # 拿不到显示器边界就退回工作区 —— 任务栏在下/上方时两者相等，
+    # 只有左右任务栏的场景会退化为「收起态卡片压在任务栏上」，能用。
+    return work_area()
 
 
 def screen_size() -> tuple[int, int]:

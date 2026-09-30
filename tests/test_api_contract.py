@@ -57,12 +57,13 @@ DIRECT_RE = re.compile(r"pywebview\.api\.([A-Za-z_]\w*)")
 #: 这既是测试数据，也是「Python 到底会调前端哪些函数」的一份文档。
 #: 加新的记得补在这里；删掉不用的会有下面那条测试提醒。
 JS_GLOBALS_CALLED_FROM_PY = (
-    "applyDock",     # ball.js：告诉页面显示展开的卡片还是收起的小方框
-    "ballAnim",      # ball.js：收起/展开动画开始，内容按方向淡出或淡入
+    "applyDock",     # ball.js：告诉页面显示展开的卡片还是收起的把手（滑出方案）
     "ballShown",     # ball.js：恢复「关闭」按钮（长期存在的窗口，禁用状态会留着）
     "refreshAll",    # app.js：主窗口整体重画
     "pulse",         # ball.js：提醒到了，让悬浮窗闪一下
     "showToast",     # toast.html：弹出提醒提示条
+    "__applySkin",   # index.html：应用自定义外观（主色调 + 半透明底色），main._push_skin 推
+    "__applyAccent", # ball.html：悬浮窗只吃主色调（窗口底色定死，不能透明），main._push_skin 推
 )
 
 

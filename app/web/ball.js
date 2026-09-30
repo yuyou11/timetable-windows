@@ -68,48 +68,30 @@ function jslog(msg) {
 // ==========================================================================
 
 /**
- * 切布局。两个入口（applyDock / ballAnim）都走这里，避免两处逻辑走偏。
+ * 切布局。Python 在落位/动画开始时调用，body 的 class 直接切到目标态。
  *
- * @param {string}  edge  'left' / 'right' / 'top' / 'bottom'，空串表示自由浮动
- * @param {boolean} isTab true = 收起的小方框，false = 展开的卡片
+ * @param {string}  edge  'left' / 'right'，空串表示自由浮动
+ * @param {boolean} isTab true = 收起（露出条上显示箭头），false = 展开的卡片
  */
 function setLayout(edge, isTab) {
   const b = document.body;
-
-  // ⚠️ 这一行会把 body 上**所有** class 清掉，包括 ball-collapsing。
-  // 所以 ballAnim 里必须先调它、再加 ball-collapsing，顺序不能反。
   b.className = isTab ? 'layout-tab' : 'layout-card';
 
-  // dock-* 决定那个方向箭头朝哪边，只有贴边收起时才用得上
+  // dock-* 决定箭头朝哪边、把手覆盖层贴哪侧，只有贴边时才用得上
   if (edge) b.classList.add('dock-' + edge);
 }
 
 /**
  * Python 算完几何之后调这个，告诉网页该显示哪种形态。
  *
- * @param {string} edge       'left' / 'right' / 'top' / 'bottom'，空串表示自由浮动
- * @param {boolean} collapsed 是否已收起
+ * 窗口是固定尺寸、整窗平移（见 ball.html 顶部说明），所以这里只切
+ * class：收起/展开的画面本身由窗口移动完成，页面里没有东西要跟着变。
+ *
+ * @param {string}  edge       'left' / 'right'，空串表示自由浮动
+ * @param {boolean} collapsed  是否已收起
  */
 window.applyDock = function (edge, collapsed) {
   setLayout(edge, !!edge && !!collapsed);
-};
-
-/**
- * 收起/展开动画开始时调这个。
- *
- * 为什么动画期间**强制用卡片布局**：窗口尺寸是 Python 逐帧改的，
- * 而 `layout-tab` 会把整个面板 `display: none` —— 那样中途就没东西可淡出了，
- * 会看到卡片"啪"地消失、然后一条空框慢慢变窄。
- * 所以动画期间一直用卡片布局，靠 `ball-collapsing` 这个 class 驱动
- * 内容淡出（CSS 过渡，见 ball.html）。等 Python 走完最后一帧，
- * 它再调 applyDock 换成最终布局，那一下是"接上"的，不是硬切。
- *
- * @param {string}  edge       'left' / 'right' / 'top' / 'bottom'
- * @param {boolean} collapsing true = 正在收起（内容淡出），false = 正在展开（淡入）
- */
-window.ballAnim = function (edge, collapsing) {
-  setLayout(edge, false);
-  document.body.classList.toggle('ball-collapsing', !!collapsing);
 };
 
 // ==========================================================================

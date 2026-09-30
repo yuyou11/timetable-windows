@@ -838,9 +838,9 @@ def courses() -> list[Course]:
 
 def templates() -> dict[DayType, list[Block]]:
     """构造内置模板。延迟到调用时才解析，避免 import 时就依赖 format_spec"""
-    from .format_spec import _parse_templates
+    from .format_spec import DEFAULT_PERIODS, _parse_templates, node_count
     raw = json.loads(TEMPLATES_JSON)
-    merged = _parse_templates(raw, [])
+    merged = _parse_templates(raw, [], node_count(DEFAULT_PERIODS))
     merged[DayType.REST] = _REST_DAY_TEMPLATE
     return merged
 

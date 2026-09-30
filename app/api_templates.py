@@ -283,12 +283,13 @@ class TemplatesMixin:
         nodes = None
         raw_nodes = p.get("nodes")
         if raw_nodes:
+            limit = self.store.node_count
             try:
                 a, b = int(raw_nodes[0]), int(raw_nodes[1])
             except (TypeError, ValueError, IndexError):
-                raise ValueError("课表占位格必须写成一到十之间的两个节次") from None
-            if not (1 <= a <= slots.MAX_NODE and 1 <= b <= slots.MAX_NODE):
-                raise ValueError(f"节次必须在 1–{slots.MAX_NODE} 之间")
+                raise ValueError(f"课表占位格必须写成 1 到 {limit} 之间的两个节次") from None
+            if not (1 <= a <= limit and 1 <= b <= limit):
+                raise ValueError(f"节次必须在 1–{limit} 之间（这所学校一天 {limit} 节）")
             if a > b:
                 raise ValueError("起始节次不能比结束节次大")
             nodes = (a, b)

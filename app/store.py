@@ -28,7 +28,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 
-from . import builtin_data, dock, format_spec
+from . import builtin_data, dock, format_spec, skin
 from .day_type_policy import DayTypePolicy
 from .format_spec import FormatError
 from .models import Block, Course, DayType
@@ -42,6 +42,20 @@ def _theme_or_system(value) -> str:
     """取值校验：不认识的就退回 `system`。"""
     text = str(value) if value is not None else ""
     return text if text in THEMES else "system"
+
+
+def _int_or(raw: Any, default: int, lo: int, hi: int) -> int:
+    """
+    读一个「用户能手改」的整数设置：坏值退回默认，越界钳进范围。
+
+    这类纯外观的值和 total_weeks 那种不一样：后者坏了宁可抛错让人发现，
+    前者坏了只是颜色不对 —— 静默退回默认比抛错（或让整个程序起不来）合适。
+    """
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
 
 
 def data_dir() -> Path:
@@ -173,6 +187,40 @@ class Store:
 
     # ---------------- 界面主题 ----------------
 
+    # ---------------- 节数信息 ----------------
+
+    @property
+    def periods(self) -> str:
+        """
+        节数信息：学校每天「上午、下午、晚上」各有几节，如 "442"。
+
+        课表网格按它分行（见 api.get_week），导入文件里可以带上自己学校
+        的结构。手改坏了一律退回默认 "442" —— 它只是显示结构，
+        不能因为一个写错的字段让程序起不来。
+        """
+        raw = self._data.get("periods")
+        return format_spec.normalize_periods(raw) or format_spec.DEFAULT_PERIODS
+
+    @periods.setter
+    def periods(self, value: str) -> None:
+        checked = format_spec.normalize_periods(value)
+        if checked is None:
+            raise ValueError(f"节数信息不对：{value!r}（应为 1-14 位数字，如 442）")
+        self._data["periods"] = checked
+        self.save()
+
+    @property
+    def node_count(self) -> int:
+        """
+        学校一天的小节数 = 节数信息各位之和（默认 "442" → 10）。
+
+        课程 nodes、课表网格行数、编辑器下拉框的合法范围都由它决定 ——
+        上限不再是写死的 10，跟着学校声明的结构走。
+        """
+        return format_spec.node_count(self.periods)
+
+    # ---------------- 界面主题 ----------------
+
     @property
     def theme(self) -> str:
         """
@@ -197,15 +245,104 @@ class Store:
         self._data["theme"] = _theme_or_system(value)
         self.save()
 
+    # ---------------- 自定义外观（主色调 / 背景图 / 卡片透明度） ----------------
+
+    @property
+    def accent(self) -> str:
+        """
+        自定义主色调，`#rrggbb` 小写。`""` = 用默认（没自定义过）。
+
+        存的值读回来要过一遍 normalize_hex：data.json 是用户能手改的，
+        手滑写个 "red" 或 "#12345" 不该让程序崩 —— 规整不了就当没设置。
+        """
+        return skin.normalize_hex(self._data.get("accent")) or ""
+
+    @accent.setter
+    def accent(self, value: str) -> None:
+        self._data["accent"] = skin.normalize_hex(value) or ""
+        self.save()
+
+    @property
+    def text_color(self) -> str:
+        """
+        背景图上的自定义文字颜色，`#rrggbb` 小写。`""` = 用默认（没自定义过）。
+
+        只在开了背景图时生效（见 skin.main_payload）：没图的时候文字都
+        落在实色卡片上，主题默认色就是对着它们调的。值照存 —— 用户先调
+        好、再选图的顺序不该有讲究，重新开图就自动回来。
+        """
+        return skin.normalize_hex(self._data.get("text_color")) or ""
+
+    @text_color.setter
+    def text_color(self, value: str) -> None:
+        self._data["text_color"] = skin.normalize_hex(value) or ""
+        self.save()
+
+    @property
+    def card_opacity(self) -> int:
+        """卡片不透明度，0–100。100 = 不透明（默认，和没有这个功能一样）。"""
+        return _int_or(self._data.get("card_opacity"), 100, 0, 100)
+
+    @card_opacity.setter
+    def card_opacity(self, value: Any) -> None:
+        self._data["card_opacity"] = _int_or(value, 100, 0, 100)
+        self.save()
+
+    @property
+    def sidebar_opacity(self) -> int:
+        """
+        侧栏不透明度，0–100。100 = 不透明。
+
+        和卡片不透明度**分开**：背景图铺满整个窗口之后，「左边透多少图」
+        和「卡片透多少图」是两个独立的偏好 —— 有人想让左侧保持实色好认路，
+        只在内容区透出图；有人想整面墙都是图。
+        """
+        return _int_or(self._data.get("sidebar_opacity"), 100, 0, 100)
+
+    @sidebar_opacity.setter
+    def sidebar_opacity(self, value: Any) -> None:
+        self._data["sidebar_opacity"] = _int_or(value, 100, 0, 100)
+        self.save()
+
+    @property
+    def bg_image(self) -> bool:
+        """是否启用了背景图。图片本体在数据目录的 background.jpg，这里只是开关。"""
+        return self._data.get("bg_image") is True
+
+    @bg_image.setter
+    def bg_image(self, value: bool) -> None:
+        self._data["bg_image"] = bool(value)
+        self.save()
+
+    @property
+    def bg_dim(self) -> int:
+        """
+        背景图上的暗化遮罩，0–100。
+
+        没有它，浅色主题配一张亮图时，卡片之间露出来的部分会把浅灰文字
+        晃得看不清 —— 这是「用背景图」这个功能自带的可读性问题，不解决
+        等于只做了一半。
+        """
+        return _int_or(self._data.get("bg_dim"), 0, 0, 100)
+
+    @bg_dim.setter
+    def bg_dim(self, value: Any) -> None:
+        self._data["bg_dim"] = _int_or(value, 0, 0, 100)
+        self.save()
+
     # ---------------- 悬浮窗的位置和停靠 ----------------
 
     @property
     def ball_edge(self) -> str:
         """
-        停靠在哪个边：''（自由浮动）/ left / right / top / bottom。
+        停靠在哪个边：''（自由浮动）/ left / right。
 
         存下来是因为：用户把卡片拖到屏幕右边缩起来，下次打开程序它**应该还在那**。
         每次都回到默认位置会让人反复调整，很烦。
+
+        白名单直接取 dock.EDGES（现在只有左右两边）。老版本数据里可能存着
+        top/bottom，读到这里自动归 ''（自由浮动）—— 收起态的几何已经没有
+        上下边了，留着旧值只会算出错误的窗口位置。
         """
         edge = str(self._data.get("ball_edge", ""))
         return edge if edge in dock.EDGES else ""
@@ -220,7 +357,7 @@ class Store:
         """
         贴边时那条要保住的中线的位置。
 
-        贴左右边时是窗口的垂直中心；贴上下边时是水平中心。
+        贴左右边时是窗口的垂直中心。
         详见 dock.py 开头的说明。
         """
         return int(self._data.get("ball_center", -1))
@@ -375,7 +512,7 @@ class Store:
         会自动跟着更新，而不是被旧数据钉死。
         """
         raw = self._data.get("templates", "")
-        custom = format_spec.templates_from_json(raw) if raw else {}
+        custom = format_spec.templates_from_json(raw, self.node_count) if raw else {}
         merged = builtin_data.templates()
         merged.update(custom)          # 用户改过的覆盖内置
         return merged
@@ -383,7 +520,7 @@ class Store:
     def custom_templates(self) -> dict[DayType, list[Block]]:
         """只看用户自定义的部分（用于界面提示和导出判断）"""
         raw = self._data.get("templates", "")
-        return format_spec.templates_from_json(raw) if raw else {}
+        return format_spec.templates_from_json(raw, self.node_count) if raw else {}
 
     def save_templates(self, mapping: dict[DayType, list[Block]]) -> None:
         self._data["templates"] = format_spec.templates_to_json(mapping)
@@ -485,6 +622,7 @@ class Store:
             self.courses(),
             self.templates() if include_schedule_config else None,
             self.day_type_policy() if include_schedule_config else None,
+            self.periods,
         )
 
     def apply_import(self, parsed: format_spec.Parsed, mode: str) -> str:
@@ -512,6 +650,11 @@ class Store:
         if parsed.day_types is not None:
             self._data["day_types"] = format_spec.day_types_to_json(parsed.day_types)
 
+        # 节数信息同理：文件里没写就不动 —— 不然每导入一份课表，
+        # 自己学校的节次结构都会被打回默认值。
+        if parsed.periods is not None:
+            self._data["periods"] = parsed.periods
+
         parts: list[str] = []
 
         if parsed.courses is None:
@@ -536,6 +679,9 @@ class Store:
 
         if parsed.day_types is not None:
             parts.append(f"启用日型 {len(parsed.day_types.enabled)} 种")
+
+        if parsed.periods is not None and parsed.periods != format_spec.DEFAULT_PERIODS:
+            parts.append(f"节次结构已改为 {parsed.periods}")
 
         self.save()
         return "，".join(parts)

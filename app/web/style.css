@@ -49,6 +49,13 @@
   --sidebar-w:     208px;
 }
 
+/* 侧栏底色默认跟卡片同一套（回退引用的是变量的**当前值**，皮肤覆盖
+   `--sidebar` 自身时才分开 —— 两组覆盖必须同给同不给，见 skin.main_payload）*/
+:root {
+  --sidebar:       var(--surface);
+  --sidebar-2:     var(--surface-2);
+}
+
 /* 深色其一：跟随系统。`[data-theme='light']` 排除掉「用户强制了浅色」。 */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
@@ -109,7 +116,7 @@ body {
   flex: 0 0 var(--sidebar-w);
   display: flex;
   flex-direction: column;
-  background: var(--surface);
+  background: var(--sidebar);
   border-right: 1px solid var(--border);
 }
 
@@ -120,16 +127,12 @@ body {
   padding: 18px 16px 14px;
 }
 
+/* 左上角的品牌图标：就是应用的 icon.png（和托盘/标题栏/exe 同一张），
+   圆角和配色都画在素材里，这里只管尺寸和不被压缩。 */
 .brand-mark {
   width: 34px; height: 34px;
   flex: 0 0 34px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius);
-  background: var(--accent);
-  color: #fff;
-  font-weight: 700;
-  font-size: 16px;
+  object-fit: contain;
 }
 
 .brand-text { display: flex; flex-direction: column; min-width: 0; }
@@ -156,7 +159,7 @@ body {
   transition: background .15s, color .15s;
 }
 
-.nav-item:hover { background: var(--surface-2); color: var(--text); }
+.nav-item:hover { background: var(--sidebar-2); color: var(--text); }
 
 .nav-item.active {
   background: var(--accent-soft);
@@ -172,7 +175,7 @@ body {
   display: inline-block;
   padding: 3px 10px;
   border-radius: 999px;
-  background: var(--surface-2);
+  background: var(--sidebar-2);
   border: 1px solid var(--border);
   color: var(--text-faint);
   font: inherit;               /* button 不自动继承字体，这里统一接管 */
@@ -206,7 +209,14 @@ button.pill:hover { border-color: var(--accent); }
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 18px;
+  /* 标题栏本身就是一张卡片：底色/描边/圆角/阴影与 .card 完全一致 ——
+     背景图模式下，标题也坐在半透明卡片上，不再直接压在图上 */
+  margin-bottom: 14px;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
 }
 
 h1 { font-size: 21px; font-weight: 650; letter-spacing: -.2px; }
@@ -420,7 +430,7 @@ h2 { font-size: 15px; font-weight: 600; }
 
 .grid .col-time {
   width: 76px;
-  padding: 6px 2px;
+  padding: 4px 2px;
   text-align: center;
   font-size: 10.5px;
   line-height: 1.5;
@@ -430,7 +440,12 @@ h2 { font-size: 15px; font-weight: 600; }
   font-variant-numeric: tabular-nums;
 }
 
-.grid td.cell { height: 68px; padding: 0; }
+.grid td.cell { height: 45px; padding: 0; }
+
+/* 行高统一钉在 45px：被连堂课跨住的行自己没有格子（rowspan 盖住了），
+   不钉的话会缩到时间标签的高度（39.5px），行距就参差了 ——
+   空格合并后铺的虚线分隔也要按这个节奏对位。 */
+.grid tbody tr { height: 45px; }
 
 .cell-inner {
   height: 100%;
@@ -456,6 +471,16 @@ h2 { font-size: 15px; font-weight: 600; }
 }
 
 .cell-inner.has:hover { filter: brightness(.96); }
+
+/* 合并的大空格：子行等分铺满，行间 4px 间距 + 淡虚线，复刻合并前的
+   「45px 格 + 4px 间距」节奏 —— 虚线正好落在真实行界上（span 内部
+   每个边界 = 49k px），对着左侧节次栏能数出空档是第几节。
+   个别行被两行课名撑高时边界会偏一两个像素，淡线无感。 */
+.cell-inner.gap-run { padding: 0; border: 0; justify-content: flex-start; gap: 4px; }
+
+.cell-inner.gap-run .gap-row { flex: 1 1 0; width: 100%; box-sizing: border-box; }
+
+.cell-inner.gap-run .gap-row + .gap-row { border-top: 1px dashed var(--border); }
 
 .cell-name {
   font-size: 11px;
@@ -617,6 +642,60 @@ h2 { font-size: 15px; font-weight: 600; }
 .field-grid label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 3px; }
 .field-grid .input { width: 100%; }
 
+/* ---------------- 自定义外观控件 ---------------- */
+
+/* 滑杆：accent-color 让轨道和滑块直接吃主题的点缀色，不用自己画 */
+input[type='range'] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+input[type='range']:disabled { cursor: default; opacity: .5; }
+
+/* 取色器：浏览器默认那圈内边距太宽，收齐一点和 .input 一致 */
+input[type='color'] {
+  width: 46px;
+  height: 31px;
+  padding: 2px 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+}
+input[type='color']::-webkit-color-swatch-wrapper { padding: 0; }
+input[type='color']::-webkit-color-swatch { border: none; border-radius: 6px; }
+
+/* 主色调的快捷色板圆点。当前选中的那颗用文字色描边 ——
+   用 accent 描边会在「恰好选中同色」时看不见 */
+.swatch {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform .15s, border-color .15s;
+}
+.swatch:hover { transform: scale(1.12); }
+.swatch.active { border-color: var(--text); }
+.swatch:disabled { opacity: .35; cursor: default; }
+.swatch:disabled:hover { transform: none; }
+
+/* 文字颜色的色板里有白色和深色 —— 实色圆点会「隐身」在卡片上：白色隐于
+   浅色卡片，深色隐于深色卡片（开了文字颜色后的配对档）。一圈 text-faint
+   的内描边两头都衬得出来（这个变量会跟着配对翻档）。 */
+#textColorRow .swatch { box-shadow: inset 0 0 0 1px var(--text-faint); }
+
+/* 背景图模式：background-image 由 JS 内联设在 body 上（要和暗化遮罩
+   合成一条值，只能在 JS 拼），这里只管铺满、居中、不随滚动 */
+body.has-bg {
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
 /* ---------------- 开关 ---------------- */
 
 .switch { position: relative; display: inline-block; width: 42px; height: 24px; flex: 0 0 42px; }
@@ -704,9 +783,14 @@ h2 { font-size: 15px; font-weight: 600; }
   transform: translate(-50%, 20px);
   padding: 10px 18px;
   border-radius: var(--radius);
-  background: var(--text);
-  color: var(--bg);
+  /* 不能用「background: var(--text) + color: var(--bg)」的反白配色 ——
+     文字颜色被覆盖成浅色时（深色图配白字），反白就成了白底白字。
+     跟卡片同一套配色：底色跟深浅配对翻档，字永远压得住。 */
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
   font-size: 13px;
+  box-shadow: var(--shadow);
   opacity: 0;
   pointer-events: none;
   transition: opacity .2s, transform .2s;

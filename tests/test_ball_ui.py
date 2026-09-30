@@ -168,7 +168,7 @@ class BallButtonTestCase(unittest.TestCase):
         #
         # 需要「窗口不存在」的场景，用例里自己再套一层 patch 覆盖掉。
         rect = mock.patch.object(
-            self.main_mod.winutil, "window_rect", lambda title: (0, 0, 244, 104)
+            self.main_mod.winutil, "window_rect", lambda title: (0, 0, 270, 104)
         )
         rect.start()
         self.addCleanup(rect.stop)
@@ -179,7 +179,9 @@ class BallButtonTestCase(unittest.TestCase):
         # 停靠状态：自由浮动，免得几何计算牵扯到真实屏幕
         app._ball_edge = None
         app._ball_x, app._ball_y = 100, 100
-        app._ball_w, app._ball_h = self.main_mod.dock.CARD_W, self.main_mod.dock.CARD_H
+        app._ball_w, app._ball_h = (
+            self.main_mod.dock.WINDOW_W, self.main_mod.dock.WINDOW_H
+        )
         return app
 
     @staticmethod
@@ -354,9 +356,9 @@ class TestBallStaysClosed(BallButtonTestCase):
     def test_hover_does_not_touch_state_while_closed(self):
         """关掉之后，鼠标进出也不该改动停靠状态。
 
-        只挡几何不挡状态的话，`_ball_collapsed` 会偷偷翻成 True 而尺寸没变 ——
-        等用户在设置里重新打开悬浮窗，就会看到一个 244×104 的窗口里
-        画着那张「收起的小方框」，状态和实际尺寸对不上。
+        只挡几何不挡状态的话，`_ball_collapsed` 会偷偷翻成 True 而窗口没动 ——
+        等用户在设置里重新打开悬浮窗，就会看到一个停在展开位置的全尺寸窗口
+        配着「已收起」的状态，两边对不上。
         """
         app = self.make_app()
         app.store._data["ball_enabled"] = False
@@ -420,9 +422,9 @@ class TestSuppressExpand(BallButtonTestCase):
 
         self.assertFalse(app._ball_collapsed, "鼠标移进来应该展开")
         self.assertEqual(
-            (self.main_mod.dock.CARD_W, self.main_mod.dock.CARD_H),
+            (self.main_mod.dock.WINDOW_W, self.main_mod.dock.WINDOW_H),
             (app._ball_w, app._ball_h),
-            "展开后尺寸应该是卡片尺寸",
+            "展开后尺寸应该是窗口的固定尺寸（滑出方案里永不 resize）",
         )
 
     def test_hover_is_swallowed_when_suppressed(self):
@@ -548,105 +550,11 @@ class TestCursorInWindow(unittest.TestCase):
             self.assertFalse(self.winutil.cursor_in_window("x"))
 
 
-class TestDockTween(unittest.TestCase):
-    """收起 / 展开动画的中间帧几何（`dock.tween_docked_geometry`）。
-
-    这是纯数学，所以在这里测；真正操作窗口的那部分（main._animate_ball）
-    只能靠跑起来看 —— 那正是 tools/probe_ball_hover.py 之类的脚本干的事。
-    """
-
-    def setUp(self):
-        from app import dock
-        self.dock = dock
-        self.area = dock.Area(0, 0, 1920, 1080)
-
-    def test_progress_zero_equals_expanded(self):
-        """progress=0 必须和「展开态」逐像素相同 —— 否则动画起点会跳一下"""
-        got = self.dock.tween_docked_geometry("right", 500, self.area, 0.0)
-        want = self.dock.docked_geometry("right", 500, self.area, False)
-        self.assertEqual(got, want)
-
-    def test_progress_one_equals_collapsed(self):
-        """progress=1 必须和「收起态」逐像素相同 —— 否则收尾会跳一下"""
-        got = self.dock.tween_docked_geometry("right", 500, self.area, 1.0)
-        want = self.dock.docked_geometry("right", 500, self.area, True)
-        self.assertEqual(got, want)
-
-    def test_size_is_monotonic_for_every_edge(self):
-        """四条边上，尺寸都要**一路减小**，不能中途反弹"""
-        for edge in self.dock.EDGES:
-            with self.subTest(edge=edge):
-                widths, heights = [], []
-                for i in range(11):
-                    x, y, w, h = self.dock.tween_docked_geometry(
-                        edge, 500, self.area, i / 10
-                    )
-                    widths.append(w)
-                    heights.append(h)
-                self.assertEqual(widths, sorted(widths, reverse=True),
-                                 f"{edge}: 宽度不是单调递减的")
-                self.assertEqual(heights, sorted(heights, reverse=True),
-                                 f"{edge}: 高度不是单调递减的")
-
-    def test_moving_edge_hugs_the_screen_edge(self):
-        """
-        动画过程中，**贴着屏幕那一侧不能动**。
-
-        这是"看起来是收进边缘"而不是"原地缩小"的关键。
-        比如贴右边，窗口右边缘要始终咬着工作区右边界。
-        """
-        for edge in self.dock.EDGES:
-            with self.subTest(edge=edge):
-                for i in range(11):
-                    x, y, w, h = self.dock.tween_docked_geometry(
-                        edge, 500, self.area, i / 10
-                    )
-                    if edge == "right":
-                        self.assertEqual(x + w, self.area.right)
-                    elif edge == "left":
-                        self.assertEqual(x, self.area.left)
-                    elif edge == "top":
-                        self.assertEqual(y, self.area.top)
-                    elif edge == "bottom":
-                        self.assertEqual(y + h, self.area.bottom)
-
-    def test_center_line_is_kept(self):
-        """那条中线（贴左右边时的垂直中心）全程都要保住，否则会跳一下"""
-        for edge in ("left", "right"):
-            with self.subTest(edge=edge):
-                for i in range(11):
-                    x, y, w, h = self.dock.tween_docked_geometry(
-                        edge, 500, self.area, i / 10
-                    )
-                    self.assertAlmostEqual(y + h / 2, 500, delta=1.0)
-
-    def test_out_of_range_progress_is_clamped(self):
-        """
-        超出 [0,1] 的值要夹回来。
-
-        缓动曲线算出 -0.0000001 或者 1.0000001 是很正常的事，
-        不夹的话会出现"比卡片还大的窗口"或"负宽度"。
-        """
-        over = self.dock.tween_docked_geometry("right", 500, self.area, 1.8)
-        at_one = self.dock.tween_docked_geometry("right", 500, self.area, 1.0)
-        self.assertEqual(over, at_one)
-
-        under = self.dock.tween_docked_geometry("right", 500, self.area, -0.5)
-        at_zero = self.dock.tween_docked_geometry("right", 500, self.area, 0.0)
-        self.assertEqual(under, at_zero)
-
-    def test_midpoint_is_between_the_two_ends(self):
-        """中间帧的尺寸要真的落在两端之间（防止插值写反）"""
-        x, y, w, h = self.dock.tween_docked_geometry("right", 500, self.area, 0.5)
-        cw, ch = self.dock.CARD_W, self.dock.CARD_H
-        tw, th = self.dock.collapsed_size("right")
-        self.assertTrue(tw < w < cw, f"宽度 {w} 不在 {tw} 和 {cw} 之间")
-        self.assertTrue(th < h < ch, f"高度 {h} 不在 {th} 和 {ch} 之间")
-
-    def test_unknown_edge_still_raises(self):
-        """方向写错要当场报错，别静默算出一个乱位置"""
-        with self.assertRaises(ValueError):
-            self.dock.tween_docked_geometry("对角线", 500, self.area, 0.5)
+# ============================================================
+#  收起/展开动画的中间帧几何改由 tests/test_dock.py 的 TestTweenSlide
+#  覆盖（窗口固定尺寸后动画就是两个 x 之间的线性插值，纯数学都在那边测）。
+#  这里只保留「跨文件契约」和动画调度本身。
+# ============================================================
 
 
 class TestEaseOut(unittest.TestCase):
@@ -675,106 +583,63 @@ class TestEaseOut(unittest.TestCase):
         self.assertGreater(self.ease(0.25), 0.25)
 
 
-class TestAnimTimingMatchesCss(BallButtonTestCase):
-    """动画时长的**跨文件一致性**
+class TestSlideContract(BallButtonTestCase):
+    """「固定尺寸 + 整窗滑出」方案的**跨文件契约**
 
-    这是一个由两个进程、两套机制共同演出的动画：
-    Python 逐帧改窗口尺寸，CSS 过渡淡出内容。两边各写了一份 160ms，
-    而**没有任何机制保证它们相等** —— 改了一边忘了另一边，
-    就会出现"窗口还在动、内容已经淡完了"或者反过来的错位。
+    旧方案里 Python 逐帧 resize、CSS 过渡淡出内容，两边各写了一份 160ms，
+    靠测试钉住相等。滑出方案里窗口永不 resize、页面没有动画时间线，
+    那组契约随之作废 —— 但换来两条新的：
 
-    这个项目对同类问题（--radius-card）的做法是让测试直接读文件核对，
-    这里沿用同一套办法。
+      · `window.ballAnim` 这条注入通道在 **两边都必须彻底删掉**。
+        只删一边的话（比如有人把 Python 那边的注入加回来），
+        JS 里已经没有这个函数，evaluate_js 会静默什么都不做 ——
+        又是一类「没有任何报错的失效」。
+      · 窗口尺寸与页面布局的对账（padding 预留把手区、箭头覆盖层的方向）
+        在 tests/test_dock.py 的 TestBallPageContract 里。
     """
 
     WEB = Path(__file__).resolve().parent.parent / "app" / "web"
 
-    def test_css_duration_equals_python_constant(self):
-        html = (self.WEB / "ball.html").read_text(encoding="utf-8")
-        m = re.search(r"--ball-anim-ms:\s*(\d+)ms", html)
-        self.assertIsNotNone(m, "ball.html 里找不到 --ball-anim-ms")
-        css_ms = int(m.group(1))
-        self.assertEqual(
-            css_ms, self.main_mod.BALL_ANIM_MS,
-            f"ball.html 的 --ball-anim-ms 是 {css_ms}ms，"
-            f"而 main.py 的 BALL_ANIM_MS 是 {self.main_mod.BALL_ANIM_MS}ms —— "
-            f"窗口动画和内容淡出会对不上",
+    def test_ball_anim_is_gone_on_both_sides(self):
+        """注入通道必须两边同时消失 —— 留半边就是静默失效的温床"""
+        main_src = (Path(__file__).resolve().parent.parent / "app" / "main.py") \
+            .read_text(encoding="utf-8")
+        self.assertNotIn(
+            "ballAnim", main_src,
+            "main.py 里还残留 ballAnim —— 滑出方案里 JS 已经删了这个函数，"
+            "谁要是在哪条路径上把注入加回来，只会静默无效",
         )
 
-    def test_animation_uses_that_variable(self):
-        """
-        过渡必须真的用这个变量，而不是另写一个数字。
-
-        ⚠️ 这里只断言「用到了这个变量」，**不钉死乘数**（0.6 / 0.45）。
-        乘数是拿抓帧截图调出来的，随时可能再调 —— 把它写进测试的话，
-        每次微调观感都要改测试，测试就变成绊脚石了。
-        要钉的是「和 --ball-anim-ms 挂钩」这件事本身。
-        """
-        html = (self.WEB / "ball.html").read_text(encoding="utf-8")
-        start = html.index("#panel > * {")
-        block = html[start:html.index("}", start)]
-        self.assertIn("var(--ball-anim-ms)", block,
-                      "内容淡出没有和 --ball-anim-ms 挂钩 —— "
-                      "改动画时长时它会和窗口脱节")
-
-    def test_ball_js_defines_ball_anim(self):
-        """
-        Python 会调 `window.ballAnim(edge, collapsing)`，JS 里必须真有它。
-
-        跨语言调用没有任何编译期检查 —— 名字打错一个字母，
-        Python 照样调用成功、前端静默什么都不做（动画就只剩窗口在动、
-        内容不淡出）。所以两边都对一遍。
-        """
         js = (self.WEB / "ball.js").read_text(encoding="utf-8")
-        # ⚠️ 必须锚定成**定义**，不能只做子串匹配。
-        #
-        # 最初写的是 `assertIn("window.ballAnim", js)`，结果被
-        # `window.ballAnimRenamed` 蒙混过关 —— 后者包含前者这个子串，
-        # 而 Python 那边依然会去调一个不存在的名字。
-        # （这是变异测试 tools/verify_anim_guards.py 照出来的，
-        #  和项目里 `assertNotIn("from .screen import *")` 被注释误伤
-        #  是同一类错误：**子串匹配描述不了"真正的语句"。**）
-        self.assertRegex(
+        self.assertNotRegex(
             js, r"window\.ballAnim\s*=\s*function",
-            "ball.js 里没有定义 window.ballAnim（Python 会调它）",
+            "ball.js 里还定义着 window.ballAnim —— 动画开始时的布局切换"
+            "已经并进 applyDock（动画一开始就推目标形态）",
         )
+
+    def test_panel_has_no_fade_machinery_left(self):
+        """内容淡出是为遮「resize 挤扁内容」而生的，滑出方案里必须删干净"""
+        html = (self.WEB / "ball.html").read_text(encoding="utf-8")
+        self.assertNotIn("ball-collapsing", html,
+                         "还残留 ball-collapsing 淡出规则")
+        self.assertNotIn("--ball-anim-ms", html,
+                         "还残留 --ball-anim-ms —— 页面已经没有动画时间线了")
 
     def test_buttons_do_not_wrap(self):
         """
         按钮文字必须单行、溢出裁掉。
 
-        这条是抓帧截图抓出来的问题（build-logs/shots/anim_collapse_440ms.png）：
-        窗口收窄时按钮跟着变窄，文字被挤得竖着折行 ——
-        「打开主窗口」变成「打开 / 主窗 / 口」，比不做动画还难看。
+        旧方案里这是抓帧截图抓出来的折行问题；现在窗口固定尺寸、
+        按钮不会再被挤窄，这条降级成纯粹的布局卫生，但值得留着 ——
+        谁往按钮里塞了长文案，折行会在 104px 高的卡片上很难看。
         """
         html = (self.WEB / "ball.html").read_text(encoding="utf-8")
         start = html.index(".row3 button {")
         block = html[start:html.index("}", start)]
         self.assertIn("white-space: nowrap", block,
-                      "按钮没禁用换行 —— 窗口收窄时文字会竖着折行")
+                      "按钮没禁用换行 —— 文字长了会在卡片里竖着折行")
         self.assertIn("overflow: hidden", block,
                       "按钮没裁掉溢出 —— 会看到半截字挤在边框外")
-
-    def test_collapse_fade_is_faster_than_expand_fade(self):
-        """
-        收起时的淡出必须**比展开时的淡入快**。
-
-        为什么两边不能对称：窗口尺寸是三次方 ease-out（前段冲得快），
-        而 CSS 的 ease-out 更平缓 —— 同一个时刻窗口已经走了 76%、
-        内容才淡到 40%，于是文字被挤折行（截图见过）。
-        所以收起方向要覆盖掉延迟并压缩时长。
-
-        这条测试盯的是**那个覆盖还在不在**：如果哪天有人把
-        `transition-duration` 那行删了（看着像冗余），
-        折行问题会立刻回来，而且只有抓到那一帧才看得见。
-        """
-        html = (self.WEB / "ball.html").read_text(encoding="utf-8")
-        start = html.index("body.ball-collapsing #panel > * {")
-        block = html[start:html.index("}", start)]
-        self.assertIn("transition-duration", block,
-                      "收起方向没有压缩淡出时长 —— 文字会在窗口收窄时折行")
-        self.assertIn("transition-delay: 0ms", block,
-                      "收起方向没有清掉延迟 —— 会延迟才开始淡出，来不及")
 
 
 class TestAnimationDriver(BallButtonTestCase):
@@ -791,19 +656,19 @@ class TestAnimationDriver(BallButtonTestCase):
         return app
 
     def test_starts_a_thread_and_tells_the_page(self):
-        """启动时应该通知网页进入动画态（否则内容不会淡出）"""
+        """动画一开始就该把**目标**布局推给网页（body class 切到终点态）"""
         app = self.make_docked_app(collapsed=False)
         app._ball_collapsed = True
-        with mock.patch.object(self.main_mod.dock, "tween_docked_geometry",
-                               return_value=(100, 100, 244, 104)):
+        with mock.patch.object(self.main_mod.dock, "tween_slide",
+                               return_value=(100, 100, 270, 104)):
             app._animate_ball(1.0)
         # 动画在后台线程里，给它一点时间发出第一帧的通知
         for _ in range(50):
-            if "ballAnim" in app.ball.scripts():
+            if "applyDock" in app.ball.scripts():
                 break
             time.sleep(0.02)
-        self.assertIn("ballAnim", app.ball.scripts(),
-                      "没有通知网页进入动画态")
+        self.assertIn("applyDock", app.ball.scripts(),
+                      "动画开始时没有通知网页切换布局")
 
     def test_token_invalidates_an_in_flight_animation(self):
         """
@@ -823,7 +688,7 @@ class TestAnimationDriver(BallButtonTestCase):
         自由浮动时没有"收起"这回事，不该动画 —— 应该立刻落位。
 
         这条防的是"动画逻辑漏判了 _ball_edge is None"：那样会在
-        没有停靠边的情况下调 tween_docked_geometry，而那个函数收到
+        没有停靠边的情况下调 tween_slide，而那个函数收到
         edge=None 会抛 ValueError（线程里会静默死掉）。
         """
         app = self.make_app()

@@ -144,26 +144,23 @@ function mk(labelText, node, full) {
 }
 
 /**
- * 建一个「第 1-10 节」的下拉框，并选中指定节次。
+ * 建一个「第 1-N 节」的下拉框，并选中指定节次。
  *
- * 课程表单要两个（起止节次），作息表单也要两个（课表格子的节次范围）——
- * 原本是两处一模一样的循环。抽成「建一个」而不是「建一对」，
- * 调用方写起来更直白，也少一层 forEach。
- *
- * ⚠️ 这里的上限 10 是**写死**的，和后端 slots.MAX_NODE 是两份独立数据。
- * bootstrap 其实已经回传了 maxNode，界面却没用上 —— 属于已知待办，
- * 改动会牵连界面行为，不在本次结构调整范围内。
+ * N 来自节数信息（bootstrap 回传的 maxNode = periods 各位之和）：
+ * 学校一天有多少节由它决定，不再写死 10。
+ * [max] 缺省 10 只是兜底 —— 正常路径都会从 STATE.maxNode 传入。
  */
-function nodeSelect(selected) {
+function nodeSelect(selected, max) {
+  const limit = max || 10;
   const sel = document.createElement('select');
   sel.className = 'input';
-  for (let i = 1; i <= 10; i++) {
+  for (let i = 1; i <= limit; i++) {
     const o = document.createElement('option');
     o.value = i;
     o.textContent = '第 ' + i + ' 节';
     sel.appendChild(o);
   }
-  sel.value = selected;
+  sel.value = Math.min(selected, limit);
   return sel;
 }
 function toMinutes(hhmm) {

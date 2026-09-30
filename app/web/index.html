@@ -22,6 +22,36 @@
         document.documentElement.setAttribute('data-theme', t);
       }
     };
+
+    /* 自定义外观（主色调 / 卡片透明度 / 背景图文字）。色值由 Python 按当前
+       深浅档算好推过来（app/skin.py），这里只管把 CSS 变量设上 —— 值是 null
+       就摘掉，摘掉即回到样式表里的默认色。「恢复默认」靠的就是摘，不是把
+       某个特定颜色当成默认再抄一份。
+
+       全部设在根上：背景图铺满整个窗口（body，见 app.js），半透明底色和
+       文字颜色自然也要全局生效 —— 图到哪，文字就跟到哪。
+
+       ⚠️ 只在主窗口用：半透明卡片在悬浮窗上会露出创建时定死的窗口底色
+       （圆角处一圈实色），所以悬浮窗只接收主色调（__applyAccent）。 */
+    window.__applySkin = function (s) {
+      if (!s) return;
+      var root = document.documentElement.style;
+      function set(name, v) {
+        if (v) root.setProperty(name, v); else root.removeProperty(name);
+      }
+      set('--accent', s.accent);
+      set('--accent-soft', s.accentSoft);
+      set('--accent-text', s.accentText);
+      set('--surface', s.surface);
+      set('--surface-2', s.surface2);
+      set('--sidebar', s.sidebar);
+      set('--sidebar-2', s.sidebar2);
+      set('--text', s.text);
+      set('--text-dim', s.textDim);
+      set('--text-faint', s.textFaint);
+      set('--border', s.border);
+      set('--danger', s.danger);
+    };
   </script>
 </head>
 <body>
@@ -29,7 +59,10 @@
 <!-- ============ 左侧导航 ============ -->
 <aside class="sidebar">
   <div class="brand">
-    <div class="brand-mark">时</div>
+    <!-- 和托盘/标题栏/exe 同一张图标。页面由 pywebview 内置 HTTP 服务托管，
+         服务根目录就是 web/，所以这里直接引同目录的 icon.png
+         （由 tools/gen_icon.py 与 assets 那份一起生成） -->
+    <img class="brand-mark" src="icon.png" alt="时间规划表图标">
     <div class="brand-text">
       <strong>时间规划表</strong>
       <span id="brandSub">加载中…</span>
@@ -240,10 +273,55 @@
           <option value="dark">始终深色</option>
         </select>
       </div>
-      <p class="hint" id="themeHint">
-        切换后要重启程序才生效。原因是悬浮窗和提示条的窗口底色只能在启动时定，
-        中途改的话，四个圆角处会露出一圈反色的边。
+      <p class="hint" id="themeHint">切换后重启程序生效。</p>
+
+      <div class="field-row" style="margin-top: 18px;">
+        <label>主色调</label>
+        <div class="row-gap" id="accentRow" style="align-items: center;">
+          <!-- 色板圆点由 page-settings.js 填充；取色器随时可以自定义 -->
+          <input type="color" id="accentPick" value="#2563eb" title="自定义颜色">
+          <button class="btn mini" id="accentReset" type="button">默认</button>
+        </div>
+      </div>
+      <p class="hint">按钮、进度条等点缀色，改完立即生效。</p>
+
+      <div class="field-row">
+        <label>背景图片</label>
+        <div class="row-gap">
+          <button class="btn" id="bgChoose" type="button">选择图片…</button>
+          <button class="btn ghost" id="bgClear" type="button">不使用</button>
+        </div>
+      </div>
+      <p class="hint">图片只存本机，铺满整个窗口（悬浮窗不受影响）。</p>
+
+      <div class="field-row">
+        <label>背景暗化</label>
+        <input type="range" id="bgDim" min="0" max="80" step="5" value="0">
+        <span class="dim" id="bgDimValue" style="flex: 0 0 42px; text-align: right;">0%</span>
+      </div>
+
+      <div class="field-row" style="margin-top: 18px;">
+        <label>文字颜色</label>
+        <div class="row-gap" id="textColorRow" style="align-items: center;">
+          <!-- 色板圆点由 page-settings.js 填充；取色器随时可以自定义 -->
+          <input type="color" id="textPick" value="#ffffff" title="自定义文字颜色">
+          <button class="btn mini" id="textReset" type="button">默认</button>
+        </div>
+      </div>
+      <p class="hint" id="textColorHint">
+        深色图配浅色文字；选浅色时卡片底色会自动换成深色半透明。没开背景图时不生效。
       </p>
+
+      <div class="field-row">
+        <label>卡片不透明度</label>
+        <input type="range" id="cardOpacity" min="30" max="100" step="5" value="100">
+        <span class="dim" id="cardOpacityValue" style="flex: 0 0 42px; text-align: right;">100%</span>
+      </div>
+      <div class="field-row">
+        <label>侧栏不透明度</label>
+        <input type="range" id="sidebarOpacity" min="30" max="100" step="5" value="100">
+        <span class="dim" id="sidebarOpacityValue" style="flex: 0 0 42px; text-align: right;">100%</span>
+      </div>
     </div>
 
     <div class="card">
@@ -251,12 +329,9 @@
         <h2>桌面悬浮窗</h2>
         <label class="switch"><input type="checkbox" id="swBall"><span></span></label>
       </div>
-      <p class="sub">
-        在桌面角落显示一块小卡片，随时看得到此刻在做什么、还剩多久。
-      </p>
+      <p class="sub">在桌面角落显示一块小卡片，随时看得到此刻在做什么、还剩多久。</p>
       <p class="sub" style="margin-top:8px">
-        <strong>贴边自动隐藏：</strong>把卡片拖到屏幕边缘松手，它会缩成一个小方块，
-        只留一个箭头在外面。鼠标移上去自动滑出来，移开又缩回去 —— 平时完全不占地方。
+        贴边自动隐藏：拖到屏幕边缘缩成小方块，鼠标移上去自动滑出。
       </p>
       <p class="hint" style="margin-top:6px">
         · 拖到任意位置 · 单击卡片打开主窗口 · 想取消隐藏就把卡片从边缘拖回来
@@ -299,7 +374,7 @@
         <button class="btn ghost" id="resetDayTypes">恢复默认</button>
       </div>
       <p class="sub">
-        程序每天按日历算出「今天是哪种日」，再从下面<strong>勾选的</strong>日型里挑一套模板。
+        程序按日历算出今天是哪种日，从下面<strong>勾选的</strong>日型里挑一套模板。
         没勾的那种会落到「回落到」选的那一套上。
       </p>
       <div class="daytype-list" id="dayTypeList"></div>

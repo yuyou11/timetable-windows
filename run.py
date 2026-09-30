@@ -94,6 +94,17 @@ def main() -> int:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
 
     _silence_streams()
+
+    # ---- 单实例检测：已经在跑就弹窗拦下，别让第二个实例白干任何活 ----
+    #
+    # 必须放在一切重活（导入 webview、建窗口、读数据）**之前** ——
+    # 拦截的意义就是「什么都不做」。为什么用互斥体而不是找窗口，
+    # 见 app/instance.py 开头的说明。
+    from app.instance import acquire, warn_already_running
+    if not acquire():
+        warn_already_running()
+        return 0
+
     # 必须在导入 webview / 创建任何窗口之前
     _declare_dpi_aware()
 
