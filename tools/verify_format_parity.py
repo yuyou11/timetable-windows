@@ -46,6 +46,8 @@ def main() -> int:
         print("FAIL: no term segment parsed", file=sys.stderr)
         return 1
 
+    # v4 起桌面日常导出是 id 键 + dayTypeNames；但 parity 对账钉的是
+    # 「桌面能逐字节复刻手机版（v3）的导出」—— 用 v3 兼容输出路径。
     rebuilt = format_spec.serialize(
         term_name=parsed.term.name,
         start_date=parsed.term.start_date,
@@ -53,6 +55,7 @@ def main() -> int:
         courses=parsed.courses,
         templates=parsed.templates,
         day_types=parsed.day_types,
+        version=3,
     )
 
     # normalise line endings only -- CRLF vs LF is a checkout artefact,

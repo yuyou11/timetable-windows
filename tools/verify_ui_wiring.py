@@ -64,9 +64,10 @@ def main() -> int:
     html = (WEB / "index.html").read_text(encoding="utf-8")
     css = (WEB / "style.css").read_text(encoding="utf-8")
 
-    methods = ["get_day_types", "save_day_types", "reset_day_types"]
+    methods = ["get_day_types", "save_day_types", "save_day_type_names",
+               "reset_day_types"]
 
-    print("1. 后端定义了这三个方法")
+    print("1. 后端定义了这几个方法")
     for m in methods:
         if re.search(r"def " + m + r"\(", py):
             ok("api_*." + m)
@@ -116,10 +117,24 @@ def main() -> int:
         api = Api(store=store)
 
         d0 = api.get_day_types()
-        if len(d0.get("types", [])) == 6:
-            ok("get_day_types 返回六种日型")
+        if len(d0.get("types", [])) == 7:
+            ok("get_day_types 返回七种日型（v4 起含休息日）")
         else:
             bad("get_day_types 返回的日型数不对：" + str(len(d0.get("types", []))))
+
+        rest = next((t for t in d0["types"] if t.get("key") == "7"), None)
+        if rest and rest.get("locked"):
+            ok("休息日行带 locked 标记（界面渲染成自动生效、无勾选框）")
+        else:
+            bad("休息日（id 7）没有 locked 标记 —— 界面会把它当可勾选日型")
+
+        # v4 的改名接口真的能走通
+        r_names = api.save_day_type_names({"1": "早八日"})
+        if r_names.get("ok") and                 next(t for t in r_names["dayTypes"]["types"] if t["key"] == "1")["label"] == "早八日":
+            ok("save_day_type_names 保存后 label 跟着变")
+        else:
+            bad("save_day_type_names 没有生效：" + str(r_names.get("message")))
+        api.reset_day_types()
 
         if all(t.get("wake") for t in d0["types"]):
             ok("每种日型都带了起床时间（界面要显示它）")
@@ -153,7 +168,7 @@ def main() -> int:
             bad("内置课表里挑不出试验日（需要有课且默认不用 A 型的工作日）——"
                 "内置数据变了？这一步的行为检查整个跳不过去")
         else:
-            r = api.save_day_types(["A", "SATURDAY", "SUNDAY"], "A")
+            r = api.save_day_types(["1", "5", "6"], "1")
             if not r.get("ok"):
                 bad("save_day_types 失败：" + str(r.get("message")))
             else:

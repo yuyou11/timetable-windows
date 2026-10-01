@@ -162,7 +162,7 @@ def check_template_overlap_guard():
     api = make_api()
     api.reset_templates()
 
-    r = api.save_template_block("A", {
+    r = api.save_template_block("1", {
         "start": "07:00", "end": "08:00", "title": "冲突", "kind": "STUDY",
     })
     assert not r["ok"], "重叠应该被拦下"
@@ -192,16 +192,16 @@ def check_wake_time_one_click():
     api.reset_templates()
 
     # 先证明死锁确实存在（这是这个接口存在的理由）
-    blocked = api.save_template_block("A", {
+    blocked = api.save_template_block("1", {
         "start": "00:00", "end": "07:30", "title": "睡觉", "kind": "SLEEP",
     }, index=0)
     assert not blocked["ok"], "单独改「睡觉」应该被重叠检查拦下（这正说明需要专门接口）"
 
     # ---- 提早起床：整段顺延，应该成功 ----
-    r = api.shift_wake_time("A", "06:30")
+    r = api.shift_wake_time("1", "06:30")
     assert r["ok"], r.get("message")
 
-    a_type = next(x for x in api.get_templates()["types"] if x["key"] == "A")
+    a_type = next(x for x in api.get_templates()["types"] if x["key"] == "1")
     assert a_type["wake"] == "06:30", f"起床时间没跟着变：{a_type['wake']}"
 
     blocks = {b["start"]: b for b in a_type["blocks"]}
@@ -211,7 +211,7 @@ def check_wake_time_one_click():
     assert blocks["06:30"]["end"] == "06:45", f"时长变了：{blocks['06:30']}"
 
     # ---- 推迟起床：起床到早八之间塞不下，必须如实报错而不是硬塞 ----
-    bad = api.shift_wake_time("A", "07:30")
+    bad = api.shift_wake_time("1", "07:30")
     assert not bad["ok"], "推迟到 07:30 会挤到早八，应该被拦下"
     assert "塞不下" in bad["message"], bad["message"]
     # 报错要指出怎么办，而不是只说「不行」
@@ -219,7 +219,7 @@ def check_wake_time_one_click():
     assert "课表格子" in bad["message"], "要说明为什么锚点不能挪"
 
     api.reset_templates()
-    back = next(x for x in api.get_templates()["types"] if x["key"] == "A")
+    back = next(x for x in api.get_templates()["types"] if x["key"] == "1")
     assert back["wake"] == "06:55", "恢复内置后应该回到 06:55"
 
 
@@ -236,7 +236,7 @@ def check_export_import_roundtrip():
     text = api.store.export_json(True)
     parsed = format_spec.parse(text)
     assert len(parsed.courses) == 19, f"内置应该是 19 门，实际 {len(parsed.courses)}"
-    assert len(parsed.templates) == 6
+    assert len(parsed.templates) == 7  # v4 起导出含休息日（id 7）
 
     api.clear_courses()
     assert len(api.get_courses()) == 0, "清空后应该是空的"
