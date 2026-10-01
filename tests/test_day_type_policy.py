@@ -890,5 +890,103 @@ class TestDayTypeNameApi(DayTypeApiTestCase):
         self.assertFalse(self.api.get_day_types()["hasCustomDayTypeNames"])
 
 
+class TestTemplateBulkApi(DayTypeApiTestCase):
+    """整套替换（save_template_blocks）与整套复制（copy_template）——
+    新一代作息编辑（时间轴 + 行内编辑）的落盘接口"""
+
+    def test_bulk_save_replaces_and_sorts(self):
+        """整列提交：顺序无关、落盘前按 start 排好"""
+        r = self.api.save_template_blocks("1", [
+            {"start": "12:00", "end": "13:00", "title": "午餐", "kind": "MEAL"},
+            {"start": "00:00", "end": "06:55", "title": "睡觉", "kind": "SLEEP"},
+            {"start": "06:55", "end": "07:30", "title": "起床、洗漱"},
+        ])
+        self.assertTrue(r["ok"], r.get("message"))
+
+        blocks = self.store.templates()[DayType.A]
+        self.assertEqual([b.start for b in blocks],
+                         sorted(b.start for b in blocks))
+        self.assertEqual(3, len(blocks))
+        self.assertEqual("睡觉", blocks[0].title)
+
+    def test_bulk_save_refuses_overlap(self):
+        r = self.api.save_template_blocks("1", [
+            {"start": "00:00", "end": "08:00", "title": "睡觉", "kind": "SLEEP"},
+            {"start": "07:00", "end": "24:00", "title": "早起"},
+        ])
+        self.assertFalse(r["ok"])
+        self.assertIn("重叠", r["message"])
+
+    def test_bulk_save_refuses_empty_and_bad_payload(self):
+        r = self.api.save_template_blocks("1", [])
+        self.assertFalse(r["ok"])
+        self.assertIn("至少", r["message"])
+
+        r = self.api.save_template_blocks("1", [
+            {"start": "08:00", "end": "09:00", "title": ""},
+        ])
+        self.assertFalse(r["ok"])
+        self.assertIn("不能为空", r["message"])
+
+        r = self.api.save_template_blocks("1", [
+            {"start": "10:00", "end": "09:00", "title": "倒流的一格"},
+        ])
+        self.assertFalse(r["ok"])
+
+    def test_bulk_save_allows_rest_day(self):
+        """休息日（id 7）v4 起是可编辑日型，整列保存对它照常工作"""
+        r = self.api.save_template_blocks("7", [
+            {"start": "00:00", "end": "24:00", "title": "完全躺平"},
+        ])
+        self.assertTrue(r["ok"], r.get("message"))
+        self.assertEqual("完全躺平", self.store.templates()[DayType.REST][0].title)
+
+    def test_bulk_save_unknown_day_type_refused(self):
+        r = self.api.save_template_blocks("MONDAY", [])
+        self.assertFalse(r["ok"])
+        self.assertIn("MONDAY", r["message"])
+
+    def test_copy_template_roundtrip(self):
+        """把 A 型整套复制到周日：格数一致、内容逐格一致"""
+        n_src = len(self.store.templates()[DayType.SUNDAY])
+        r = self.api.copy_template("1", "6")
+        self.assertTrue(r["ok"], r.get("message"))
+        self.assertIn("→", r["message"])
+
+        dst = self.store.templates()[DayType.SUNDAY]
+        self.assertEqual(len(self.store.templates()[DayType.A]), len(dst))
+        self.assertGreater(len(dst), 0)
+        # 覆盖语义：dst 原来的内容不再出现
+        self.assertNotEqual(n_src, None)
+        back = self.api.get_templates()
+        label_dst = next(t for t in back["types"] if t["key"] == "6")
+        self.assertTrue(label_dst["isCustom"], "复制后目标应标记为已自定义")
+
+    def test_copy_template_refuses_same_and_unknown(self):
+        r = self.api.copy_template("5", "5")
+        self.assertFalse(r["ok"])
+        self.assertIn("同一个", r["message"])
+
+        r = self.api.copy_template("MONDAY", "5")
+        self.assertFalse(r["ok"])
+        self.assertIn("MONDAY", r["message"])
+
+    def test_every_bulk_response_is_json_serializable(self):
+        import json
+        responses = [
+            self.api.save_template_blocks("1", [
+                {"start": "00:00", "end": "24:00", "title": "一天"},
+            ]),
+            self.api.save_template_blocks("1", []),        # 失败路径
+            self.api.copy_template("1", "5"),
+            self.api.copy_template("5", "5"),              # 失败路径
+        ]
+        for i, r in enumerate(responses):
+            try:
+                json.dumps(r)
+            except TypeError as e:
+                self.fail(f"第 {i + 1} 个返回值不能 JSON 序列化：{e}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

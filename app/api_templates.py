@@ -152,6 +152,81 @@ class TemplatesMixin:
         # 别的模板方法从来都是只通知一次的。
         return self._templates_ok(result.message)
 
+    def save_template_blocks(self, day_type: str, blocks: list) -> dict[str, Any]:
+        """
+        整套替换某一日型的模板 —— 新一代作息编辑（时间轴 + 行内编辑）的落盘接口。
+
+        前端的编辑会话在本地工作副本上自由改（拖拽、行内编辑、撤销），
+        点「保存」时把整列一次性提交到这里。逐格的 save_template_block /
+        delete_template_block 保留着（smoke 测试和旧路径还在用），
+        但拖拽式编辑不能用它们 —— 每帧一次「落盘 + 通知提醒线程重排」
+        既浪费也会让悬浮窗抽搐。
+
+        校验与逐格版同一套规矩（排序、重叠报错、至少一格）；
+        传入的顺序不重要，落盘前会按 start 排好。
+        """
+        day_type_enum = _parse_day_type(day_type)
+        if day_type_enum is None:
+            return {"ok": False, "message": f"未知的日型：{day_type}"}
+        if not isinstance(blocks, list):
+            return {"ok": False, "message": "参数格式不对：blocks 要是一个数组"}
+
+        try:
+            new_blocks = [self._block_from_payload(b) for b in blocks]
+        except ValueError as e:
+            return {"ok": False, "message": str(e)}
+
+        if not new_blocks:
+            return {"ok": False, "message": "至少要留一格，否则这一天就没有作息了"}
+
+        new_blocks.sort(key=lambda b: b.start)
+        for prev, cur in zip(new_blocks, new_blocks[1:]):
+            if cur.start < prev.end:
+                return {
+                    "ok": False,
+                    "message": (
+                        f"这两格时间重叠了：\n\n"
+                        f"　{slots.fmt(prev.start)}–{slots.fmt(prev.end)}　{prev.title}\n"
+                        f"　{slots.fmt(cur.start)}–{slots.fmt(cur.end)}　{cur.title}\n\n"
+                        f"同一时刻只能有一件固定的事。"
+                    ),
+                }
+
+        full = self.store.templates()
+        full[day_type_enum] = new_blocks
+        self.store.save_templates(full)
+        return self._templates_ok(f"已保存「{self._type_label(day_type_enum)}」"
+                                  f"（{len(new_blocks)} 格）")
+
+    def copy_template(self, src: str, dst: str) -> dict[str, Any]:
+        """
+        整套复制：把 src 日型的模板原样复制到 dst（覆盖）。
+
+        改作息的多数需求其实是「让某一天跟另一天差不多，再微调两格」——
+        逐格重抄一遍既慢又容易抄错。复制是整体动作，所以放在后端做：
+        一次落盘、一套校验，前端拿到的是和手改完全一致的结果。
+        """
+        src_enum = _parse_day_type(src)
+        dst_enum = _parse_day_type(dst)
+        if src_enum is None:
+            return {"ok": False, "message": f"未知的日型：{src}"}
+        if dst_enum is None:
+            return {"ok": False, "message": f"未知的日型：{dst}"}
+        if src_enum is dst_enum:
+            return {"ok": False, "message": "源和目标是同一个日型 —— 不需要复制"}
+
+        full = self.store.templates()
+        full[dst_enum] = [b.copy() for b in full[src_enum]]
+        self.store.save_templates(full)
+        return self._templates_ok(
+            f"已复制：{self._type_label(src_enum)} → {self._type_label(dst_enum)}"
+            f"（{len(full[dst_enum])} 格）"
+        )
+
+    def _type_label(self, day_type: DayType) -> str:
+        """当前生效的日型名（自定义名优先）—— 报错和成功消息都用它"""
+        return day_type_name(day_type, self.store.day_type_names)
+
     def reset_templates(self) -> dict[str, Any]:
         self.store.reset_templates()
         return self._templates_ok("已恢复内置作息模板")

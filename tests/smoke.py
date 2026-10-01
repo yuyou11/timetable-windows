@@ -226,6 +226,40 @@ def check_wake_time_one_click():
 check("改起床时间一步到位（含死锁验证）", check_wake_time_one_click)
 
 
+def check_bulk_save_and_copy():
+    """新一代作息编辑的两个落盘接口：整套替换 + 整套复制"""
+    api = make_api()
+
+    # 整套替换：乱序提交，后端要排序 + 校验
+    r = api.save_template_blocks("5", [
+        {"start": "10:00", "end": "12:00", "title": "上午自由"},
+        {"start": "00:00", "end": "09:30", "title": "睡觉", "kind": "SLEEP"},
+        {"start": "09:30", "end": "10:00", "title": "起床"},
+    ])
+    assert r["ok"], r.get("message")
+    sat = api.store.templates()[DayType.SATURDAY]
+    assert [b.start for b in sat] == sorted(b.start for b in sat), "落盘前要排序"
+    assert sat[0].title == "睡觉"
+
+    # 重叠要被拦下
+    bad = api.save_template_blocks("5", [
+        {"start": "00:00", "end": "12:00", "title": "睡觉", "kind": "SLEEP"},
+        {"start": "11:00", "end": "24:00", "title": "撞车"},
+    ])
+    assert not bad["ok"] and "重叠" in bad["message"]
+
+    # 整套复制：周六 → 周日，逐格一致
+    r = api.copy_template("5", "6")
+    assert r["ok"], r.get("message")
+    sun = api.store.templates()[DayType.SUNDAY]
+    assert len(sun) == len(sat)
+    assert ([(b.start, b.end, b.title) for b in sun]
+            == [(b.start, b.end, b.title) for b in sat]), "复制后逐格不一致"
+
+
+check("整套替换 + 整套复制", check_bulk_save_and_copy)
+
+
 def check_export_import_roundtrip():
     api = make_api()
     # 前面的用例往数据里加过课，先归零，否则这里的门数对不上。
