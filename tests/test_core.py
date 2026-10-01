@@ -23,12 +23,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import builtin_data, engine, format_spec, slots
-from app.day_type_policy import DayTypePolicy
+from app.day_type_policy import DayTypeConfig, DayTypePolicy, config_from_policy
 from app.format_spec import FormatError
 from app.models import Block, Course, DayType, Kind
 
 
 TERM_START = date(2026, 9, 7)
+
+#: 「恒等配置」——星期映射到旧自然槽位（周二→训练A、周四→训练B…）、
+#: 早八优先层 = A。resolve_day_type 在它之下与 v4 的
+#: natural_day_type + DayTypePolicy.ALL 逐日一致：
+#: 测引擎原始行为（模板叠加、连堂合并、收口）用它当基线。
+IDENTITY = config_from_policy(DayTypePolicy.ALL)
 
 
 def d(y: int, m: int, day: int) -> date:
@@ -95,14 +101,14 @@ class TestDayType(unittest.TestCase):
     日型推导是全程序最核心的一条规则：
     只看「今天第 1-2 节有没有课」，不按星期几写死。
 
-    ## ⚠️ 这里测的是 natural_day_type（纯日历规则）
+    ## ⚠️ 这里测的是引擎规则本身（用恒等配置当基线）
 
-    加了日型策略之后，「日历上是哪种日」和「实际用哪套模板」是两件事
-    （见 DayTypePolicy 的说明）。这一组测的是**前者**，所以调
-    `natural_day_type`，策略不参与 —— 否则「周二算不算训练日」这种问题
+    「日历上是哪种日」和「实际用哪套模板」是两件事（见
+    DayTypeConfig 的说明）。这一组测的是**前者**，所以调
+    `resolve_day_type` + 恒等配置 —— 否则「周二算不算训练日」这种问题
     会被默认策略盖住，测不出规则本身。
 
-    策略的映射行为单独在 TestDayTypePolicy 里测。
+    配置模型的映射行为单独在 test_day_type_policy.py 里测。
     """
 
     def setUp(self):
@@ -110,37 +116,37 @@ class TestDayType(unittest.TestCase):
 
     def test_monday_with_early_class_is_a(self):
         self.assertEqual(
-            DayType.A, engine.natural_day_type(d(2026, 9, 21), 3, self.courses)   # 第 3 周周一有英语
+            DayType.A, engine.resolve_day_type(d(2026, 9, 21), 3, self.courses, IDENTITY)   # 第 3 周周一有英语
         )
 
     def test_monday_before_courses_start_is_rest(self):
         # 第 1 周大学英语还没开（它是 2-4、6-17 周）→ 全天没课
         # 无课日按休息日过（REST），而不是按 B 型把人按 07:25 的节奏排满
         self.assertEqual(
-            DayType.REST, engine.natural_day_type(d(2026, 9, 7), 1, self.courses)
+            DayType.REST, engine.resolve_day_type(d(2026, 9, 7), 1, self.courses, IDENTITY)
         )
 
     def test_friday_no_early_class_is_b(self):
         # 第 2 周周五有课（体育、思德等），但没有早八 → B 型
         # 这条和上面那条合起来才是完整规则：有课没早八 = B 型，没课 = REST
         self.assertEqual(
-            DayType.B_NORMAL, engine.natural_day_type(d(2026, 9, 11), 2, self.courses)
+            DayType.B_NORMAL, engine.resolve_day_type(d(2026, 9, 11), 2, self.courses, IDENTITY)
         )
 
     def test_week8_wednesday_no_courses_is_rest(self):
         # 高数周三 1-2 节是「2-7、9-17 周」，第 8 周正好不上；
         # 周三其它的课也都排不到第 8 周 → 全天没课 → 休息日
         self.assertEqual(
-            DayType.REST, engine.natural_day_type(d(2026, 10, 28), 8, self.courses)
+            DayType.REST, engine.resolve_day_type(d(2026, 10, 28), 8, self.courses, IDENTITY)
         )
 
     def test_training_days(self):
-        self.assertEqual(DayType.B_TRAIN_A, engine.natural_day_type(d(2026, 9, 22), 3, self.courses))
-        self.assertEqual(DayType.B_TRAIN_B, engine.natural_day_type(d(2026, 9, 24), 3, self.courses))
+        self.assertEqual(DayType.B_TRAIN_A, engine.resolve_day_type(d(2026, 9, 22), 3, self.courses, IDENTITY))
+        self.assertEqual(DayType.B_TRAIN_B, engine.resolve_day_type(d(2026, 9, 24), 3, self.courses, IDENTITY))
 
     def test_weekend(self):
-        self.assertEqual(DayType.SATURDAY, engine.natural_day_type(d(2026, 9, 26), 3, self.courses))
-        self.assertEqual(DayType.SUNDAY, engine.natural_day_type(d(2026, 9, 27), 3, self.courses))
+        self.assertEqual(DayType.SATURDAY, engine.resolve_day_type(d(2026, 9, 26), 3, self.courses, IDENTITY))
+        self.assertEqual(DayType.SUNDAY, engine.resolve_day_type(d(2026, 9, 27), 3, self.courses, IDENTITY))
 
 
 class TestWakeMinute(unittest.TestCase):
@@ -172,26 +178,26 @@ class TestTimeline(unittest.TestCase):
         self.courses = builtin_data.courses()
         self.templates = builtin_data.templates()
 
-    def moments(self, dt, week, policy=None):
+    def moments(self, dt, week, config=None):
         """
-        ⚠️ 这里的**默认策略是 ALL（六种日型全开）**，不是产品的默认策略。
+        ⚠️ 这里的**默认配置是 IDENTITY（恒等映射）**，不是产品的默认配置。
 
         理由：这一组测的是**引擎本身**（模板叠加、连堂合并、收口），
-        不是「默认配置长什么样」。用 ALL 当作恒等映射，
-        测的就是 engery 的原始行为 —— 和加日型策略之前完全一致，
+        不是「默认配置长什么样」。用恒等配置，
+        测的就是引擎的原始行为 —— 和加日型配置之前完全一致，
         所以原有断言一条都不用改。
 
-        要测「默认策略会筛掉什么」，就显式传 DayTypePolicy.DEFAULT
+        要测「默认配置会筛掉什么」，就显式传 DayTypeConfig.DEFAULT
         （见 test_default_policy_hides_training）。
         """
         return engine.moments(
             dt, week, self.courses, self.templates,
-            DayTypePolicy.ALL if policy is None else policy,
+            IDENTITY if config is None else config,
         )
 
-    def at(self, dt, week, hhmm, policy=None):
+    def at(self, dt, week, hhmm, config=None):
         h, m = (int(x) for x in hhmm.split(":"))
-        return engine.current_at(self.moments(dt, week, policy), h * 60 + m)
+        return engine.current_at(self.moments(dt, week, config), h * 60 + m)
 
     # ---------- 课表覆盖模板 ----------
 
@@ -234,18 +240,18 @@ class TestTimeline(unittest.TestCase):
 
     def test_tuesday_evening_is_training(self):
         """
-        ⚠️ 这条要显式用 `DayTypePolicy.ALL`。
+        ⚠️ 这条要显式用恒等配置 `IDENTITY`。
 
         默认策略**关掉了训练日**（周二 / 周四都回落到 B_NORMAL），
         所以「周二晚上有训练」这件事只在**六种日型全开**时才成立。
         这正是日型策略存在的意义 —— 见下面 test_default_policy_hides_training。
         """
-        m = self.at(d(2026, 9, 22), 3, "19:30", policy=DayTypePolicy.ALL)
+        m = self.at(d(2026, 9, 22), 3, "19:30", config=IDENTITY)
         self.assertIn("训练", m.title)
         self.assertEqual(Kind.TRAIN, m.kind)
 
     def test_thursday_training_is_strength_b(self):
-        m = self.at(d(2026, 9, 24), 3, "19:30", policy=DayTypePolicy.ALL)
+        m = self.at(d(2026, 9, 24), 3, "19:30", config=IDENTITY)
         self.assertIn("力量 B", m.note)
 
     def test_default_policy_hides_training(self):
@@ -259,7 +265,7 @@ class TestTimeline(unittest.TestCase):
         这条和上面两条是一对：同一个时刻、同一份模板，
         只有策略不同，结果就应该不同。**只测一边说明不了策略真的生效了。**
         """
-        m = self.at(d(2026, 9, 22), 3, "19:30", policy=DayTypePolicy.DEFAULT)
+        m = self.at(d(2026, 9, 22), 3, "19:30", config=DayTypeConfig.DEFAULT)
         self.assertNotIn("训练", m.title)
         self.assertNotEqual(Kind.TRAIN, m.kind)
 
@@ -321,9 +327,9 @@ class TestTimeline(unittest.TestCase):
         dt = d(2026, 9, 21)
         self.assertEqual(
             DayType.B_NORMAL,
-            engine.day_type(dt, 3, disabled, DayTypePolicy.ALL),
+            engine.day_type(dt, 3, disabled, IDENTITY),
         )
-        ms = engine.moments(dt, 3, disabled, self.templates, DayTypePolicy.ALL)
+        ms = engine.moments(dt, 3, disabled, self.templates, IDENTITY)
         self.assertIn("黄金自习块", engine.current_at(ms, 9 * 60).title)
 
     def test_disabling_other_course_only_affects_that_slot(self):
@@ -847,11 +853,12 @@ class TestRealPhoneExport(unittest.TestCase):
         **测试不该依赖「另一个项目里的示例文件永远不变」。**
         """
         p = format_spec.parse(self.PHONE_EXPORT.read_text(encoding="utf-8"))
-        policy = p.day_types or DayTypePolicy.DEFAULT
+        # v3 文件的 dayTypes 段在 parse 时已迁移成 day_type_config
+        config = p.day_type_config or DayTypeConfig.DEFAULT
 
         # 手机版示例里周一 1-2 节是「大学英语」
         dt = TERM_START + timedelta(days=2 * 7)          # 第 3 周周一
-        ms = engine.moments(dt, 3, p.courses, p.templates, policy)
+        ms = engine.moments(dt, 3, p.courses, p.templates, config)
 
         self.assertEqual(0, ms[0].start, "时间轴必须从 00:00 开始")
         self.assertEqual(1440, ms[-1].end, "时间轴必须到 24:00 结束")
@@ -877,8 +884,8 @@ class TestRealPhoneExport(unittest.TestCase):
         dt = TERM_START + timedelta(days=2 * 7 + 1)      # 第 3 周周二
         week = 3
 
-        with_default = engine.moments(dt, week, p.courses, p.templates, DayTypePolicy.DEFAULT)
-        with_all = engine.moments(dt, week, p.courses, p.templates, DayTypePolicy.ALL)
+        with_default = engine.moments(dt, week, p.courses, p.templates, DayTypeConfig.DEFAULT)
+        with_all = engine.moments(dt, week, p.courses, p.templates, IDENTITY)
 
         # 周二晚上：全开时有训练，默认策略下没有
         def at(ms, hhmm):
@@ -892,9 +899,9 @@ class TestRealPhoneExport(unittest.TestCase):
 
         # 「用哪套模板」也要跟着变
         self.assertEqual(DayType.B_TRAIN_A,
-                         engine.day_type(dt, week, p.courses, DayTypePolicy.ALL))
+                         engine.day_type(dt, week, p.courses, IDENTITY))
         self.assertEqual(DayType.B_NORMAL,
-                         engine.day_type(dt, week, p.courses, DayTypePolicy.DEFAULT))
+                         engine.day_type(dt, week, p.courses, DayTypeConfig.DEFAULT))
 
     @unittest.skipUnless(PHONE_EXPORT.exists(), "找不到手机版导出的示例文件")
     def test_serialize_reproduces_the_phone_export_byte_for_byte(self):

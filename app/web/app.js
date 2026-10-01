@@ -302,32 +302,20 @@ function bindEvents() {
     }
   };
 
-  // 日型策略
-  $('saveDayTypes').onclick = async () => {
-    const enabled = [...document.querySelectorAll('#dayTypeList input:checked')]
-      .map((cb) => cb.dataset.key);
-    const r = await call('save_day_types', enabled, $('dayTypeFallback').value);
-    if (!r.ok) {
-      // 校验失败（比如一种都没勾）用弹窗而不是 toast ——
-      // 报错里写了「该怎么办」，一闪而过的提示读不完
-      await modal({ title: '保存失败', body: r.message, buttons: [{ label: '知道了', value: 1, primary: true }] });
-      return;
-    }
-    toast(r.message);
-    await renderDayTypes();
-    await refreshAll();
-  };
+  // 日型管理（v5）：星期映射和编辑卡片都在 page-settings.js 里即时保存，
+  // 这里只绑「新建」和「恢复默认」两个入口。
+  $('addDayType').onclick = () => newDayTypeDialog();
 
   $('resetDayTypes').onclick = async () => {
     if (!await confirmBox('恢复默认日型',
-      '会恢复成默认那四种：A 型日（id 1）、B 型日（id 2）、周六（id 5）、周日（id 6）。\n\n' +
-      '训练日（id 3、id 4）的细分会被关掉 —— 它们来自某一份具体规划表，'
-      + '不是通用规律。\n\n自定义的日型名也会全部还原。课表和模板都不受影响。',
+      '会恢复成出厂的日型列表（7 种）、星期映射和早八日型，'
+      + '自定义的日型名和新建的日型都会消失。\n\n课表和各自的作息模板内容不受影响。',
       '恢复')) return;
     const r = await call('reset_day_types');
     if (r.ok) {
       if (r.settings) { STATE.settings = r.settings; updateStatusPill(r.settings); }
       await renderDayTypes();
+      await renderTemplates();
       await refreshAll();
       toast(r.message);
     }

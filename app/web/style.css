@@ -719,6 +719,54 @@ h2 { font-size: 15px; font-weight: 600; }
 .tpl-status { margin-top: 12px; }
 .danger-text { color: var(--danger); }
 
+/* ---------------- 日型管理（v5） ---------------- */
+
+/* 星期映射：七行下拉，两列布局省纵向空间 */
+.weekday-map {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 14px;
+  margin: 10px 0;
+}
+.weekday-map .weekday-row { margin: 0; }
+.weekday-map .weekday-row label {
+  flex: 0 0 44px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+/* 日型卡片里的星期勾选 */
+.weekday-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+.wd-check {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.wd-check:has(input:checked) {
+  border-color: var(--accent);
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+/* 模板页标签末尾的「＋ 新建」 */
+.type-tab.add {
+  border-style: dashed;
+}
+.type-tab.add:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
 /* ---------------- 按钮 ---------------- */
 
 .btn {

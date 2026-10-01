@@ -22,7 +22,7 @@ from datetime import date, timedelta
 from typing import Iterable, Optional, Sequence
 
 from . import slots
-from .day_type_policy import DayTypePolicy
+from .day_type_policy import DayTypeConfig
 from .models import (
     Block,
     Course,
@@ -76,103 +76,83 @@ def monday_of(d: date) -> date:
 #  第一步：今天属于哪种日型
 # ============================================================
 
-def natural_day_type(d: date, week: int, courses: Iterable[Course]) -> DayType:
+def courses_on(d: date, week: int, courses: Iterable[Course]) -> list[Course]:
+    """今天实际要上的课（已按周次过滤）"""
+    dow = d.isoweekday()
+    return [c for c in courses if c.enabled and c.day_of_week == dow and week in c.weeks]
+
+
+def has_early_class(d: date, week: int, courses: Iterable[Course]) -> bool:
     """
-    **日历上是哪种日** —— 判断依据按顺序两条：
+    「有早八」的日历定义：今天第 1-2 节有课。
 
-      1. 工作日**全天没课** → REST（无课休息日）。程序不认识国庆中秋，
-         但「课表里这天一门课都没有」是数据里写得明明白白的客观事实 ——
-         假期、停课、课表没排到的周次都会落到这里，按休息日过（没有晚自修）。
-      2. 有课的工作日，再看**今天第 1-2 节有没有课**区分 A / B 型。
+    这是**日历事实**，不受任何配置影响 —— 界面上的「· 有早八」
+    后缀永远按它说话（day_type_display）。
+    """
+    return any(c.start_node <= 2 for c in courses_on(d, week, courses))
 
-    这是整个设计里最值得注意的一处。文档里写死了「周一、周三 = A 型」，
-    但如果照抄成 `if dow in (1, 3)`，那么第 8 周停课、国庆调课、中秋放假时，
-    程序还会按 A 型让你 06:55 起床 —— 错的。
 
-    改成「现算」之后，这几种情况**自动就对**了，一行特判都不用写。
+def resolve_day_type(
+    d: date,
+    week: int,
+    courses: Iterable[Course],
+    config: DayTypeConfig,
+) -> DayType:
+    """
+    今天实际用哪套模板 —— 引擎判定的唯一入口。按顺序三条：
 
-    ## 它和 day_type() 的分工
+      ① 工作日全天无课 → 休息日（REST）。「课表里这天一门课都没有」
+         是数据里写得明明白白的客观事实 —— 假期、停课、课表没排到的
+         周次都落到这里。它**不受星期映射影响**：休息日不是一种
+         「偏好」，再怎么映射也不能把没课的日子变成上学日。
+      ② 工作日有早八且配置指定了早八日型 → early_type。
+         「今天要不要早起」是这个程序存在的理由，这一层优先于星期映射。
+      ③ 其余 → weekday_map[星期几]。
 
-    这个函数回答「**日历上是哪种日**」，`day_type()` 回答
-    「**这次实际要用哪套模板**」。两者的差别来自 `DayTypePolicy`：
-    这份配置可能根本没启用训练日，那么算出来的 `B_TRAIN_A` 就要被映射成别的。
+    ## ⚠️ `config` 故意不给默认值
 
-    拆成两层的好处是策略可配置 —— 如果这里直接把训练日那两行删掉，
-    就再也没有「想让训练日生效」的余地了。
+    忘了传配置的话，程序会静悄悄按默认映射跑 —— 界面按 A 型显示、
+    通知却按 B 型排，这类不一致查起来非常费劲。不给默认值，
+    每个漏改的调用点都会当场 TypeError。Python 没有编译期检查，
+    这个报错就是我们的「编译器」。
 
-    **要测「日历规则」本身（比如「周二算不算训练日」）就调这个。**
+    ## 周末为什么不做「无课 → 休息日」
 
-    （手机版里叫 naturalDayType，同一个东西。REST 是电脑版先加的，
-    手机版跟进之前，同一份课表在手机上仍会把无课日按 B 型过。）
+    现状语义：周末不管有没有课都按周六/周日（映射目标）的模板过 ——
+    周末的作息本来就不由课表驱动。只有**工作日**的无课才判休息日
+    （假期、停课、调课都发生在工作日）。
     """
     dow = d.isoweekday()          # 1=周一 … 7=周日
-    if dow == 6:
-        return DayType.SATURDAY
-    if dow == 7:
-        return DayType.SUNDAY
-
-    today = [c for c in courses
-             if c.enabled and c.day_of_week == dow and week in c.weeks]
-    if not today:
+    if dow >= 6:
+        return config.weekday_map[dow - 1]
+    if not courses_on(d, week, courses):
         return DayType.REST       # 全天没课 → 按休息日过
-
-    if any(c.start_node <= 2 for c in today):
-        return DayType.A
-
-    if dow == 2:
-        return DayType.B_TRAIN_A
-    if dow == 4:
-        return DayType.B_TRAIN_B
-    return DayType.B_NORMAL
-
-
-def _used_type(natural: DayType, policy: DayTypePolicy) -> DayType:
-    """
-    REST 短路 + 策略映射 —— 「日历日型 → 实际日型」的共用最后一步。
-
-    原来这段在 day_type() 和 day_type_display() 里各写一遍，注释也承认
-    「改策略映射规则时，两处要一起动」。抽出来之后这条规矩就不用人守了：
-    只有这一个地方定义「REST 不参与映射」。
-
-    ## REST 不参与映射
-
-    无课休息日在进入策略**之前**就拦下来了：「那天没课」是课表决定的
-    客观事实，不是用户可以配置的偏好。而且它不在任何 policy.enabled 里
-    （它不是可选日型）—— 不拦的话，`resolve()` 会把它映射成 fallback，
-    假期里又变回上学日，晚自修就回来了。
-    """
-    if natural is DayType.REST:
-        return DayType.REST
-    return policy.resolve(natural)
+    if config.early_type is not None and has_early_class(d, week, courses):
+        return config.early_type
+    return config.weekday_map[dow - 1]
 
 
 def day_type(
     d: date,
     week: int,
     courses: Iterable[Course],
-    policy: DayTypePolicy,
+    config: DayTypeConfig,
 ) -> DayType:
     """
-    **实际要用的日型** —— 原始日历规则再经过 `policy` 映射。
+    **实际要用的日型** —— resolve_day_type 的对外名字。
 
-    ## ⚠️ `policy` 故意不给默认值
+    ## ⚠️ `config` 故意不给默认值
 
-    如果给它一个默认值，那么调用方「忘了传策略」时不会有任何提示，
-    程序会静悄悄地按默认策略跑 —— 而界面按 A 型显示、通知却按 B 型排，
-    这类不一致查起来非常费劲。
-
-    不给默认值的话，**每个漏改的调用点都会当场 TypeError**，一个都跑不掉。
-    Python 没有编译期的参数检查，这个报错就是我们的「编译器」。
-    （手机版那边是 Kotlin 编译期报错，效果一样，理由写在 DayTypePolicy 的注释里。）
+    理由见 resolve_day_type：漏传配置必须当场报错，不能静默按默认跑。
     """
-    return _used_type(natural_day_type(d, week, courses), policy)
+    return resolve_day_type(d, week, courses, config)
 
 
 def day_type_display(
     d: date,
     week: int,
     courses: Iterable[Course],
-    policy: DayTypePolicy,
+    config: DayTypeConfig,
     names: Optional[dict[DayType, str]] = None,
 ) -> str:
     """
@@ -187,27 +167,19 @@ def day_type_display(
     「A 型日」时，自然会想知道今天要不要早起 —— 而这**不能从标签推出来**：
 
         默认配置下    A 型日 ⟺ 当天第 1-2 节有课（有早八）
-        自定义配置下  用户可以让工作日全部回落到 A 型模板，
+        自定义配置下  用户可以让工作日全部落到 A 型模板，
                      于是「A 型日」不再意味着「有早八」
 
     实测过一次：把工作日全落到 A 之后，周二（当天没课）的界面
     依然显示「A 型日 · 有早八」—— **那是一句假话**。
 
-    所以「有没有早八」去问**日历**（natural_day_type），
-    「用哪套模板」去问**策略**（day_type），两者拼起来才是完整的描述。
+    所以「有没有早八」去问**日历**（has_early_class），
+    「用哪套模板」去问**配置**（day_type），两者拼起来才是完整的描述。
     """
-    natural = natural_day_type(d, week, courses)
-    # REST 的短路在 _used_type 里（曾在这里和 day_type 各写一遍，
-    # 抽成共用的一段之后映射规则只有一个定义点）
-    used = _used_type(natural, policy)
+    used = day_type(d, week, courses, config)
     label = day_type_name(used, names)
-    return f"{label} · 有早八" if natural is DayType.A else label
-
-
-def courses_on(d: date, week: int, courses: Iterable[Course]) -> list[Course]:
-    """今天实际要上的课（已按周次过滤）"""
-    dow = d.isoweekday()
-    return [c for c in courses if c.enabled and c.day_of_week == dow and week in c.weeks]
+    early = d.isoweekday() <= 5 and has_early_class(d, week, courses)
+    return f"{label} · 有早八" if early else label
 
 
 def wake_minute(template: Sequence[Block]) -> Optional[int]:
@@ -238,12 +210,12 @@ def moments(
     week: int,
     courses: Sequence[Course],
     templates: dict[DayType, Sequence[Block]],
-    policy: DayTypePolicy = DayTypePolicy.DEFAULT,
+    config: DayTypeConfig = DayTypeConfig.DEFAULT,
 ) -> list[Moment]:
     """
     把模板和当天的课叠成一条完整的时间轴。
 
-    `policy` 有默认值（和 `templates` 一样），因为**老的调用点保持原样就能继续工作** ——
+    `config` 有默认值（和 `templates` 一样），因为**老的调用点保持原样就能继续工作** ——
     这是给参数设默认值的好处。但要注意：这里给默认值**不同于** `day_type()` 里
     故意不给 —— 那里不给是为了逼出「忘了传策略」的错误，而这里给，
     是因为 `moments` 是引擎入口，它的调用点（api / main / 测试）
@@ -254,7 +226,7 @@ def moments(
     手机版把两者放进同一个 `TemplateSet` 对象里就是为解决这个。
     这里由 `store.template_set()` 负责成对返回，见那边的说明。
     """
-    base = templates[day_type(d, week, courses, policy)]
+    base = templates[day_type(d, week, courses, config)]
     today_courses = courses_on(d, week, courses)
 
     course_blocks = [

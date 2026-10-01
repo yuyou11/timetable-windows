@@ -27,7 +27,6 @@ from typing import Any, Optional
 
 from . import __version__, engine, format_spec, skin, slots
 from .models import (
-    DAY_TYPE_ORDER,
     Course,
     DayType,
     Kind,
@@ -125,11 +124,12 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
             # 重复应用无害（和 theme 兜底是同一个思路）。
             "skin": self._skin_dict(),
             "today": self.get_today(),
-            # 七行全给（含休息日）：前端哪一页要显示日型名，都以这里的
-            # label 为准 —— 名字是用户数据（v4），不能让前端再抄一份默认值。
+            # 现存的日型全给（v5 起由 dayTypeConfig 决定有哪几个）：
+            # 前端哪一页要显示日型名，都以这里的 label 为准 ——
+            # 名字是用户数据，不能让前端再抄一份默认值。
             "dayTypes": [
                 {"key": t.value, "label": day_type_name(t, self.store.day_type_names)}
-                for t in DAY_TYPE_ORDER + [DayType.REST]
+                for t in self.store.day_type_config().types
             ],
             "kinds": [k.value for k in Kind],
             "maxNode": self.store.node_count,
@@ -168,7 +168,6 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
             # 前端不要自己用 hasCustomTemplates 去判断：
             # 那样在「只改了日型、没改模板」时会把日型设置漏掉（手机版踩过）。
             "hasCustomScheduleConfig": self.store.has_custom_schedule_config,
-            "dayTypes": self.store.day_type_policy().as_dict(),
         }
 
     def _skin_dict(self) -> dict[str, Any]:
@@ -192,8 +191,8 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
         courses = self.store.courses()
         # 模板和策略**成对**取 —— 理由见 store.template_set 的说明
         # （「策略和模板必须同源」，否则会出现按 A 的策略取了 B 的模板）
-        templates, policy = self.store.template_set()
-        items = engine.moments(today, week, courses, templates, policy)
+        templates, config = self.store.template_set()
+        items = engine.moments(today, week, courses, templates, config)
 
         now = datetime.now()
         now_minute = now.hour * 60 + now.minute
@@ -208,12 +207,12 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
             "week": week,
             "isBeforeTerm": week < 1,
             "isAfterTerm": week > self.store.total_weeks,
-            "dayType": engine.day_type(today, week, courses, policy).value,
+            "dayType": engine.day_type(today, week, courses, config).value,
             # 用 day_type_display 而不是 DAY_TYPE_LABEL：后者只说「用哪套模板」，
             # 而「今天有没有早八」是日历决定的另一件事 —— 自定义策略下
             # 两者会分家（把工作日全落到 A 型时，「A 型日·有早八」就是假话）。
             "dayTypeLabel": engine.day_type_display(
-                today, week, courses, policy, self.store.day_type_names),
+                today, week, courses, config, self.store.day_type_names),
             "now": _moment_dict(current, now_minute) if current else None,
             "next": (
                 {"time": slots.fmt(nxt.start), "title": nxt.title} if nxt else None
@@ -227,10 +226,10 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
         """明天的预告：几点起、第一件事、有几节课、最后一项"""
         tomorrow = date.today() + timedelta(days=1)
         week = self.store.week_of(tomorrow)
-        templates, policy = self.store.template_set()
-        day_type = engine.day_type(tomorrow, week, courses, policy)
+        templates, config = self.store.template_set()
+        day_type = engine.day_type(tomorrow, week, courses, config)
         template = templates[day_type]
-        items = engine.moments(tomorrow, week, courses, templates, policy)
+        items = engine.moments(tomorrow, week, courses, templates, config)
 
         wake = engine.wake_minute(template)
         first = next((m for m in items if m.kind != Kind.SLEEP and m.start > 0), None)
@@ -245,7 +244,7 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
             "weekday": format_spec.WEEKDAY_CN[tomorrow.isoweekday()],
             "week": week,
             "dayTypeLabel": engine.day_type_display(
-                tomorrow, week, courses, policy, self.store.day_type_names),
+                tomorrow, week, courses, config, self.store.day_type_names),
             "wake": slots.fmt(wake) if wake is not None else None,
             "wakeMinutes": wake,
             "first": (
@@ -272,7 +271,7 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
         this_week = self.store.week_of(date.today())
         week = max(1, min(self.store.total_weeks, this_week + int(offset)))
         courses = self.store.courses()
-        _, policy = self.store.template_set()
+        _, config = self.store.template_set()
 
         monday = self.store.term_start + timedelta(days=(week - 1) * 7)
         sunday = monday + timedelta(days=6)
@@ -291,7 +290,7 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
         days = []
         for i in range(1, WEEK_DAYS + 1):
             dt = monday + timedelta(days=i - 1)
-            day_type = engine.day_type(dt, week, courses, policy)
+            day_type = engine.day_type(dt, week, courses, config)
             days.append({
                 "dow": i,
                 "label": format_spec.WEEKDAY_CN[i].replace("周", ""),

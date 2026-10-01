@@ -1,85 +1,131 @@
 """
-日型策略 —— 决定「哪几种日型真的会被用到」。
+日型配置 —— 「哪几种日型存在、星期几用哪种、有早八优先用哪种」。
 
-这是 Android 版 `data/DayTypePolicy.kt` 的 Python 移植。
-**两边的行为必须完全一致**，否则同一份文件在手机和电脑上会得到不同的时间轴。
+## v5：DayTypePolicy → DayTypeConfig
 
-## 为什么需要它
+日型可创建/删除、星期可映射之后，旧的「启用集合 + 回落」模型
+（DayTypePolicy）从运行时退役，换成三样东西：
 
-引擎能算出**六种**日型：
+    types        现存的日型 id（**必含休息日 "7"**，最多 7 个）
+    weekday_map  周一..周日 各映射到哪种日型（恰好 7 项）
+    early_type   工作日有早八时优先用的日型；None = 不区分早八
 
-    A          有早八的日子
-    B_TRAIN_A  周二 · 力量A     ← 这两条来自原文档里的训练安排
-    B_TRAIN_B  周四 · 力量B     ← 只对排了力量训练的人有意义
-    B_NORMAL   没早八的日子
-    SATURDAY / SUNDAY
+引擎判定顺序（engine.resolve_day_type）：
 
-但「周二练力量A」是**某一份具体规划表**里的安排，不是通用规律。
-别人的课表里可能根本没有训练日，那两套模板就纯属噪声 ——
-更要紧的是，它会让「周二到底该几点起」这件事变得难以回答。
+    ① 工作日全天无课              → 休息日（客观事实，最高优先）
+    ② 工作日有早八且指定了早八型   → early_type
+    ③ 其余                        → weekday_map[星期几]
 
-所以把「引擎能算出什么」和「这套配置实际用哪些」拆成两层：
+休息日不参与 weekday_map 和 early_type —— 它只由「工作日全天没课」
+这一条客观事实触发，跟星期映射是两个层面。
 
-    natural_day_type()   纯日历规则 —— 今天第 1-2 节有没有课
-    DayTypePolicy.resolve()   映射到这份配置真正启用的日型上
+## DayTypePolicy 为什么还在
 
-**这是很通用的一招：把「算得出什么」和「要用什么」拆开，
-中间那层策略就成了可配置的。** 直接改计算逻辑做不到这点 ——
-一旦写死就没有回旋余地了。
-
-## 默认值为什么是这四个
-
-`enabled = {A, B_NORMAL, SATURDAY, SUNDAY}`、`fallback = B_NORMAL`
-
-效果是：
-
-    有早八的日子     → A 型日，06:55 起床
-    没早八的工作日   → B 型日，07:25 起床
-    周末             → 周六 / 周日模板
-
-也就是说 —— **「有早八 / 没早八」这个最核心的区分完整保留了**，
-被裁掉的只有「力量A / 力量B」这个细分。
-
-取舍的理由：「今天要不要早起」是这个程序存在的理由，不能动；
-而训练日的细分只对少数人有意义，让它默认不出现、需要时再显式打开。
-
-**默认值应该保留「所有人都需要的行为」，把「只有部分人需要的行为」变成可选。**
-反过来做的话，大多数人会觉得这个软件在自顾自地替他们安排事情。
+v3/v4 文件的 dayTypes 段和旧 data.json 的 day_types 键还在用它。
+读进来之后由 config_from_policy() **确定性迁移**成 DayTypeConfig，
+迁移结果与旧程序的默认行为逐日一致（见那边的对照表）。
+它不再参与任何运行时判定。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 from .models import DAY_TYPE_ORDER, DayType
 
+#: 日型数量上限（id 空间 "1"-"7"，其中 "7" 恒为休息日）
+MAX_DAY_TYPES = 7
+
+
+@dataclass(frozen=True)
+class DayTypeConfig:
+    """
+    一份配置里「日型系统」的全貌。
+
+    frozen=True：和 DayTypePolicy 同一个理由 —— 它被当作**值**在
+    存储序列化、引擎、界面之间传来传去，可变对象只会带来
+    「谁把它改了」的追查成本。
+    """
+
+    #: 现存的日型 id 集合（按 id 升序）。**必须含 REST** —— 休息日
+    #: 是引擎的自动判定层，不存在「删掉休息日」这个操作。
+    types: tuple[DayType, ...]
+
+    #: 周一..周日 各映射到哪种日型。恰好 7 项；每一项都必须 ∈ types
+    #: 且不能是 REST（休息日不走映射）。
+    weekday_map: tuple[DayType, ...]
+
+    #: 工作日有早八（第 1-2 节有课）时优先用的日型。
+    #: None = 不区分早八 —— 有早八的工作日也按星期映射走。
+    early_type: Optional[DayType]
+
+    def manages(self, day_type: DayType) -> bool:
+        """这个 id 是否现存（删除守卫 / 编辑入口都用它）"""
+        return day_type in self.types
+
+    def weekdays_of(self, day_type: DayType) -> list[int]:
+        """这个日型管哪些星期几（1=周一 … 7=周日），升序"""
+        return [dow for dow, t in enumerate(self.weekday_map, start=1) if t is day_type]
+
+
+#: 旧「自然规则」里每个星期几对应的槽位 —— config_from_policy 的迁移依据。
+#: （v4 及更早：周二 → 训练日A、周四 → 训练日B，其余工作日 → 普通日。）
+_LEGACY_NATURAL_SLOT = {
+    1: DayType.B_NORMAL,
+    2: DayType.B_TRAIN_A,
+    3: DayType.B_NORMAL,
+    4: DayType.B_TRAIN_B,
+    5: DayType.B_NORMAL,
+    6: DayType.SATURDAY,
+    7: DayType.SUNDAY,
+}
+
+
+def config_from_policy(policy: "DayTypePolicy") -> DayTypeConfig:
+    """
+    把旧 DayTypePolicy **确定性迁移**成 DayTypeConfig。
+
+    规则：每个星期几先落到旧自然槽位（周二→训练日A…），槽位在
+    enabled 里就用槽位，不在就用 fallback —— 这正是旧 resolve()
+    对那一天给出的答案，所以迁移前后**逐日等价**。
+    早八优先层同理：A 启用则早八用 A，否则用 fallback。
+    """
+    def slot(dow: int) -> DayType:
+        natural = _LEGACY_NATURAL_SLOT[dow]
+        return natural if natural in policy.enabled else policy.fallback
+
+    early = DayType.A if DayType.A in policy.enabled else policy.fallback
+    return DayTypeConfig(
+        types=tuple(DAY_TYPE_ORDER) + (DayType.REST,),
+        weekday_map=tuple(slot(dow) for dow in range(1, 8)),
+        early_type=early,
+    )
+
+
+# ============================================================
+#  以下为 v3/v4 兼容构件 —— 不参与运行时判定
+# ============================================================
 
 @dataclass(frozen=True)
 class DayTypePolicy:
     """
-    哪几种日型真会被用到。
+    【已退役】旧模型：「启用哪几种 + 没启用时回落到哪种」。
 
-    frozen=True 是有意的：这个对象会被当作**值**传递（存进配置、序列化、
-    在几处之间共享），可变对象在这里只会带来「谁把它改了」的追查成本。
+    还活着的原因只有一个：v3/v4 文件的 dayTypes 段和旧 data.json
+    仍在用它表达配置，解析后立刻经 config_from_policy 迁移。
+    新代码请用 DayTypeConfig。
     """
 
     #: 这份配置里**真正会被用到**的日型集合，不能为空
     enabled: frozenset[DayType]
 
     #: 算出来的日型不在 `enabled` 里时，改用哪一种
+    #: （允许不在 enabled 里 —— 「用这套模板兜底」是独立指定）
     fallback: DayType
 
     def resolve(self, computed: DayType) -> DayType:
-        """
-        把「日历算出来的日型」映射成「这次实际要用的日型」。
-
-        只有一个分支，但它是整个策略的落点：
-        启用就用原样的，没启用就退回 `fallback`。
-
-        注意 `fallback` **不必**在 `enabled` 里 —— 它表示的是
-        「用这套模板来兜底」，是一个独立的指定，不是「启用了一种日型」。
-        手机版那边的注释把这条写成了设计决定之一，这里保持一致。
-        """
+        """旧引擎的映射落点：启用就用原样，没启用退回 fallback"""
         return computed if computed in self.enabled else self.fallback
 
     def as_dict(self) -> dict[str, object]:
@@ -90,20 +136,15 @@ class DayTypePolicy:
         }
 
 
-#: 不裁剪任何日型 —— 引擎算出什么就用什么。
-#:
-#: 测「原始日历规则」时用这个：它让 resolve() 变成恒等映射，
-#: 于是测的就是 natural_day_type() 那条规则本身。
-#: （手机版里叫 ALL，是同一个用途。）
+#: 【已退役】不裁剪任何日型 —— 引擎算出什么就用什么。
+#: 只剩一个用途：测「v3 旧规则本身」时当恒等映射。
 ALL = DayTypePolicy(
     enabled=frozenset(DAY_TYPE_ORDER),
     fallback=DayType.B_NORMAL,
 )
 
-#: 默认策略（也是文件里没写 `dayTypes` 段时的回落值）。
-#:
-#: 只保留「有早八 / 没早八」这档最核心的区分，去掉训练日的细分。
-#: 详见模块开头对默认值取舍的说明。
+#: 【已退役】旧默认策略（A + 没早八的 B + 周末，训练日不启用）。
+#: 新模型的默认值在 DayTypeConfig.DEFAULT；这个对象只服务旧文件解析。
 DEFAULT = DayTypePolicy(
     enabled=frozenset({
         DayType.A,
@@ -114,15 +155,26 @@ DEFAULT = DayTypePolicy(
     fallback=DayType.B_NORMAL,
 )
 
-# ⚠️ 这两个也挂到类上（`DayTypePolicy.DEFAULT`），对齐手机版的
-# `DayTypePolicy.Companion.DEFAULT` —— 那边它们就住在 companion object 里。
-#
-# 为什么不只留模块级？因为**调用方写起来更像「它属于这个类型」**：
-# `DayTypePolicy.DEFAULT` 一眼看出是「这种策略的默认值」，
-# 而裸的 `DEFAULT` 得回头翻 import 才知道是谁的默认值。
-# 两种写法都留着，是因为模块级的那个在 `day_type_policy.ALL` 这种
-# 明确限定的场合更短，而项目里两种用法都会有。
-#
-# 写法上不能在类体里直接构造自己（类还没建完），所以只能建完之后挂上去。
+# 挂到类上对齐手机版 Companion 的写法（历史约定，见 git 历史）
 DayTypePolicy.ALL = ALL          # type: ignore[attr-defined]
 DayTypePolicy.DEFAULT = DEFAULT  # type: ignore[attr-defined]
+
+
+#: 新模型的默认配置 —— 与 DayTypePolicy.DEFAULT 的行为**逐日一致**：
+#: 有早八 → A 型日；其余工作日 → B 型日（训练日默认不启用，效果上
+#: 周二/周四也走 B 型日）；周六/周日各自的模板。
+#: 对照：config_from_policy(DayTypePolicy.DEFAULT) 的结果就是这个。
+def _default_config() -> DayTypeConfig:
+    return DayTypeConfig(
+        types=tuple(DAY_TYPE_ORDER) + (DayType.REST,),
+        weekday_map=(
+            DayType.B_NORMAL, DayType.B_NORMAL, DayType.B_NORMAL,
+            DayType.B_NORMAL, DayType.B_NORMAL,
+            DayType.SATURDAY, DayType.SUNDAY,
+        ),
+        early_type=DayType.A,
+    )
+
+
+DEFAULT_CONFIG = _default_config()
+DayTypeConfig.DEFAULT = DEFAULT_CONFIG  # type: ignore[attr-defined]

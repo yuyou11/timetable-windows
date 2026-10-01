@@ -380,21 +380,25 @@
 
     <div class="card">
       <div class="card-head">
-        <h2>启用哪些日型</h2>
+        <h2>星期怎么排</h2>
         <button class="btn ghost" id="resetDayTypes">恢复默认</button>
       </div>
       <p class="sub">
-        程序按日历算出今天是哪种日，从下面<strong>勾选的</strong>日型里挑一套模板。
-        没勾的那种会落到「回落到」选的那一套上；标着「自动」的休息日
-        （无课的工作日）永远生效，不用勾。「改名」给日型起自己的名字。
+        每一天用哪套作息由<strong>星期映射</strong>决定（改动即生效）；
+        有早八的工作日优先用「早八日型」。标着「自动」的休息日
+        （工作日全天没课）由引擎判定，永远生效、不参与映射。
+        日型可以自己新建、删除、改名 —— 点行尾的「编辑」。
       </p>
-      <div class="daytype-list" id="dayTypeList"></div>
       <div class="field-row">
-        <label>回落到</label>
-        <select id="dayTypeFallback" class="input"></select>
+        <label>早八日型</label>
+        <select id="earlyTypeSel" class="input"></select>
+      </div>
+      <div class="weekday-map" id="weekdayMap"></div>
+      <div class="daytype-list" id="dayTypeList"></div>
+      <div class="row-gap" style="margin-top: 10px;">
+        <button class="btn" id="addDayType">＋ 新建日型</button>
       </div>
       <p class="hint" id="dayTypeHint"></p>
-      <button class="btn primary" id="saveDayTypes">保存日型设置</button>
     </div>
 
     <div class="card">
@@ -404,7 +408,7 @@
              （唯一来源是 app/__init__.py）。写死已经漂移过一次：
              程序到 2.0 的时候这里还是 v1.0。 -->
         <span id="aboutVersion">时间规划表 · 电脑版</span><br>
-        数据格式 timetable v4 —— 与手机版通用（v3 老文件照常导入）<br>
+        数据格式 timetable v5 —— 与手机版通用（v3/v4 老文件照常导入）<br>
         所有数据存在本机，不联网、不上传
       </p>
     </div>

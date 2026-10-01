@@ -3,12 +3,12 @@ Is the day-type UI actually wired to anything?
 
 Two failure modes this checks, both silent in production:
 
-  M1  save_day_types() writes the setting but does NOT notify / the engine
-      ignores it  -> the user changes the setting and nothing happens.
-      Simulated by making save_day_types a no-op.
+  M1  save_weekday_map() writes the mapping but the engine ignores it
+      -> the user changes the weekday mapping and nothing happens.
+      Simulated by making the save a no-op.
 
-  M2  the fallback not-in-enabled guard is removed
-      -> the UI would accept a self-contradictory combination.
+  M2  the "mapping target must be a managed day type" guard is removed
+      -> the UI would accept a mapping to a nonexistent day type.
 
 Both mutations must be CAUGHT for the tests to be worth anything.
 
@@ -23,17 +23,17 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-# 日型那三个桥接方法原来住在 api.py，split_api 重构后搬进了
+# 日型那几个桥接方法原来住在 api.py，split_api 重构后搬进了
 # api_templates.py —— 守卫的锚点跟着代码走（2026-09 修）。
 API = ROOT / "app" / "api_templates.py"
 
-TESTS = "tests.test_day_type_policy.TestDayTypeApi"
+TESTS = "tests.test_day_type_policy.TestDayTypeManageApi"
 
-SAVE_BODY = "        self.store.save_day_type_policy(\n            DayTypePolicy(enabled=frozenset(chosen), fallback=fb)\n        )"
-SAVE_NOOP = "        pass  # MUTATION: setting is silently dropped"
+SAVE_BODY = "        self.store.save_day_type_config(DayTypeConfig(\n            types=config.types, weekday_map=tuple(new_map),\n            early_type=config.early_type,\n        ))"
+SAVE_NOOP = "        pass  # MUTATION: mapping is silently dropped"
 
-GUARD = "        if fb not in chosen:"
-GUARD_OFF = "        if False:  # MUTATION: guard disabled"
+GUARD = "            if t is None or not config.manages(t):\n                return {\"ok\": False,\n                        \"message\": f\"{WEEKDAY_CN[i + 1]}映射到的日型「{raw}」不存在\"}"
+GUARD_OFF = "            if False:  # MUTATION: guard disabled\n                pass"
 
 
 def say(msg):
@@ -73,12 +73,12 @@ def main():
     results = []
     try:
         for label, fixed, broken, test_id in [
-            ("M1 save is a no-op (setting silently dropped)",
+            ("M1 save is a no-op (mapping silently dropped)",
              SAVE_BODY, SAVE_NOOP,
-             TESTS + ".test_save_actually_changes_behaviour"),
-            ("M2 fallback-not-in-enabled guard removed",
+             TESTS + ".test_save_weekday_map_roundtrip"),
+            ("M2 mapping-target guard removed",
              GUARD, GUARD_OFF,
-             TESTS + ".test_fallback_outside_enabled_is_refused_by_the_ui"),
+             TESTS + ".test_save_weekday_map_validation"),
         ]:
             say("")
             say("=== " + label + " ===")

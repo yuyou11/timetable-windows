@@ -260,6 +260,43 @@ def check_bulk_save_and_copy():
 check("整套替换 + 整套复制", check_bulk_save_and_copy)
 
 
+def check_day_type_manage():
+    """v5：创建 → 改派星期 → 删除，以及三道删除守卫"""
+    api = make_api()
+
+    # 默认满 7 种：新建要被拦下
+    r = api.create_day_type("考试日")
+    assert not r["ok"] and "满" in r["message"], "满员时新建要被拦下"
+
+    # 删掉「谁都不管」的训练日A（id 3），腾出名额
+    assert api.delete_day_type("3")["ok"], "默认配置下 id 3 谁都不管，应可删"
+    r = api.create_day_type("考试日")
+    assert r["ok"] and r["newId"] == "3", "新建应分配最小空闲 id"
+
+    # 三道删除守卫
+    assert not api.delete_day_type("7")["ok"], "休息日删不掉"
+    assert not api.delete_day_type("2")["ok"], "管着星期的日型删不掉"
+
+    # 把周二改派给考试日 → 它现在管着周二
+    assert api.update_day_type("3", {"weekdays": [2]})["ok"]
+    assert not api.delete_day_type("3")["ok"], "管着星期的日型删不掉"
+    d = api.get_day_types()
+    tue = [t for t in d["types"] if t["key"] == "3"][0]
+    assert tue["weekdays"] == [2], "改派后考试日应管周二"
+
+    # 改派回 B 型日 → 可删
+    assert api.update_day_type("2", {"weekdays": [1, 2, 3, 4, 5]})["ok"]
+    assert api.delete_day_type("3")["ok"]
+
+    # 早八日型切换 + 星期映射校验
+    assert api.save_early_type("")["ok"]
+    assert api.save_early_type("2")["ok"]
+    assert not api.save_weekday_map(["2", "7", "2", "2", "2", "5", "6"])["ok"],         "映射到休息日要被拦下"
+
+
+check("日型管理：创建/删除/星期映射", check_day_type_manage)
+
+
 def check_export_import_roundtrip():
     api = make_api()
     # 前面的用例往数据里加过课，先归零，否则这里的门数对不上。

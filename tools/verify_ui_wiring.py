@@ -64,7 +64,8 @@ def main() -> int:
     html = (WEB / "index.html").read_text(encoding="utf-8")
     css = (WEB / "style.css").read_text(encoding="utf-8")
 
-    methods = ["get_day_types", "save_day_types", "save_day_type_names",
+    methods = ["get_day_types", "create_day_type", "delete_day_type",
+               "update_day_type", "save_weekday_map", "save_early_type",
                "reset_day_types"]
 
     print("1. 后端定义了这几个方法")
@@ -83,8 +84,8 @@ def main() -> int:
 
     print("3. 前端绑定的元素都在 HTML 里")
     # JS 里 $('xxx') 用到的、和日型相关的那几个 id
-    for elem in ["dayTypeList", "dayTypeFallback", "dayTypeHint",
-                 "saveDayTypes", "resetDayTypes"]:
+    for elem in ["dayTypeList", "earlyTypeSel", "weekdayMap",
+                 "addDayType", "dayTypeHint", "resetDayTypes"]:
         if ('id="' + elem + '"') in html:
             ok('#' + elem)
         else:
@@ -94,7 +95,8 @@ def main() -> int:
             bad("前端 JS 里没有引用 #" + elem)
 
     print("4. 用到的 CSS 类都有定义")
-    for cls in ["daytype-list", "daytype-item", "daytype-wake", "daytype-badge"]:
+    for cls in ["daytype-list", "daytype-item", "daytype-wake", "daytype-badge",
+                "weekday-map", "wd-check"]:
         if ("." + cls) in css:
             ok("." + cls)
         else:
@@ -118,85 +120,74 @@ def main() -> int:
 
         d0 = api.get_day_types()
         if len(d0.get("types", [])) == 7:
-            ok("get_day_types 返回七种日型（v4 起含休息日）")
+            ok("get_day_types 返回七种日型（默认满 7 种）")
         else:
             bad("get_day_types 返回的日型数不对：" + str(len(d0.get("types", []))))
 
         rest = next((t for t in d0["types"] if t.get("key") == "7"), None)
-        if rest and rest.get("locked"):
-            ok("休息日行带 locked 标记（界面渲染成自动生效、无勾选框）")
+        if rest and rest.get("locked") and not rest.get("weekdays"):
+            ok("休息日行 locked 且不参与映射（界面渲染成自动生效）")
         else:
-            bad("休息日（id 7）没有 locked 标记 —— 界面会把它当可勾选日型")
+            bad("休息日（id 7）的 locked/映射状态不对")
 
-        # v4 的改名接口真的能走通
-        r_names = api.save_day_type_names({"1": "早八日"})
-        if r_names.get("ok") and                 next(t for t in r_names["dayTypes"]["types"] if t["key"] == "1")["label"] == "早八日":
-            ok("save_day_type_names 保存后 label 跟着变")
+        if d0.get("earlyType") == "1":
+            ok("默认早八日型是 id 1（A 型日）")
         else:
-            bad("save_day_type_names 没有生效：" + str(r_names.get("message")))
-        api.reset_day_types()
+            bad("默认早八日型不对：" + str(d0.get("earlyType")))
 
-        if all(t.get("wake") for t in d0["types"]):
-            ok("每种日型都带了起床时间（界面要显示它）")
+        # 新建 → 映射 → 删除：三个桥接真的能走通
+        self_del = api.delete_day_type("3")
+        if self_del.get("ok"):
+            ok("删除「谁都不管」的日型成功（腾出 id 3）")
         else:
-            bad("有日型没带起床时间，界面上会显示空白")
+            bad("删除日型失败：" + str(self_del.get("message")))
 
-        # ---- 挑试验日（必须动态挑，理由见下） ----
-        #
-        # 假期自动识别（53780bf）上线后，没课的工作日会被判成 REST，
-        # 而 REST **刻意**不参与策略映射（休息日不该被改回上学日）——
-        # 在 REST 日上改策略「理应无效」。所以试验日不能写死周五：
-        # 要挑一个「有课、且默认策略下不用 A 型模板」的工作日
-        # （比如周二的 B 训练日），改策略强制回落到 A，起床时间才会变。
-        mon = date(2026, 9, 21)          # 内置学期里的某一周的周一
-        week = store.week_of(mon)
-        probe, before = None, None
-        for i in range(5):
-            d = mon + timedelta(days=i)
-            courses = store.courses()
-            if engine.natural_day_type(d, week, courses) is DayType.REST:
-                continue                 # 休息日改策略本来就无效，当不了试验日
-            tpl, pol = store.template_set()
-            used = engine.day_type(d, week, courses, pol)
-            if used is DayType.A:
-                continue                 # 本来就用 A，改成「只留 A」不会变
-            probe = d
-            before = (used, engine.wake_minute(tpl[used]))
-            break
-
-        if probe is None:
-            bad("内置课表里挑不出试验日（需要有课且默认不用 A 型的工作日）——"
-                "内置数据变了？这一步的行为检查整个跳不过去")
+        r_new = api.create_day_type("考试日")
+        if r_new.get("ok") and r_new.get("newId") == "3":
+            ok("create_day_type 分配了最小空闲 id")
         else:
-            r = api.save_day_types(["1", "5", "6"], "1")
-            if not r.get("ok"):
-                bad("save_day_types 失败：" + str(r.get("message")))
-            else:
-                ok("save_day_types 保存成功")
+            bad("create_day_type 没走通：" + str(r_new.get("message")))
 
-            def probe_wake():
-                tpl, pol = store.template_set()
-                used = engine.day_type(probe, week, store.courses(), pol)
-                return used, engine.wake_minute(tpl[used])
+        r_map = api.update_day_type("3", {"weekdays": [2]})
+        if r_map.get("ok"):
+            ok("update_day_type 改派星期成功")
+        else:
+            bad("update_day_type 没走通：" + str(r_map.get("message")))
 
-            after = probe_wake()
-            if before != after:
-                ok(f"行为真的变了：{probe.strftime('%a')} "
-                   f"{before[0].value} {before[1] // 60}:{before[1] % 60:02d}"
-                   f" -> {after[0].value} {after[1] // 60}:{after[1] % 60:02d}")
-            else:
-                bad("保存前后行为完全一样 —— 设置没生效（这正是最难发现的那种坏法）")
+        # 行为检查：周二改派后，起床时间跟着新模板走
+        tue = date(2026, 9, 15)          # 第 2 周周二（有课、无早八）
+        week = store.week_of(tue)
 
-        # 失败路径也要能用（界面靠它弹提示）
-        r_bad = api.save_day_types([], "A")
+        def tue_wake():
+            tpl, cfg = store.template_set()
+            used = engine.day_type(tue, week, store.courses(), cfg)
+            return used, engine.wake_minute(tpl[used])
+
+        after_map = tue_wake()
+        if after_map[0].value == "3":
+            ok(f"行为真的变了：周二 -> 日型 3（起床 "
+               f"{after_map[1] // 60}:{after_map[1] % 60:02d}）")
+        else:
+            bad("星期映射没生效 —— 周二没走到改派的日型（最难发现的那种坏法）")
+
+        # 映射到不存在的日型必须被拦下（M2 变异守的就是这道）
+        r_bad = api.save_weekday_map(["3", "MONDAY", "3", "3", "3", "5", "6"])
         if not r_bad.get("ok") and r_bad.get("message"):
-            ok("空选择被拦下，并且给了可读的提示")
+            ok("映射到不存在的日型被拦下，并且给了可读的提示")
         else:
-            bad("一种日型都不勾却没有被拦下")
+            bad("映射到不存在的日型却没有被拦下")
+
+        r_names = api.update_day_type("1", {"name": "早八日"})
+        if r_names.get("ok") and next(
+                t for t in r_names["dayTypes"]["types"] if t["key"] == "1"
+        )["label"] == "早八日":
+            ok("update_day_type 改名后 label 跟着变")
+        else:
+            bad("update_day_type 改名没有生效：" + str(r_names.get("message")))
 
         r_reset = api.reset_day_types()
-        if r_reset.get("ok") and not r_reset["dayTypes"]["hasCustomDayTypes"]:
-            ok("reset_day_types 恢复成功")
+        if r_reset.get("ok") and not r_reset["dayTypes"]["hasCustomDayTypeConfig"]:
+            ok("reset_day_types 恢复成功（配置和名字一起还原）")
         else:
             bad("reset_day_types 没有恢复到默认状态")
     finally:

@@ -33,7 +33,7 @@ from datetime import date
 from typing import Any, Optional
 
 from . import slots
-from .day_type_policy import DayTypePolicy
+from .day_type_policy import DayTypeConfig, DayTypePolicy, config_from_policy
 from .models import DAY_TYPE_ORDER, Block, Course, DayType, Kind
 
 FORMAT_ID = "timetable"
@@ -45,10 +45,14 @@ FORMAT_ID = "timetable"
 #: v3 → v4 日型改用 **id 1-7** 标识，并新增可选的 `dayTypeNames` 段
 #: （自定义日型名）；templates 段的键同步改成 id，且新增 "7"
 #: （休息日 —— v4 起它的模板可以随文件携带）。
+#: v4 → v5 新增可选的 `dayTypeConfig` 段：日型可创建/删除（types）、
+#: 星期几映射到哪种日型（weekdayMap）、早八优先层（earlyType）。
+#: 旧 dayTypes 段（启用/回落）被它取代 —— 读到旧段会**确定性迁移**
+#: 成映射（见 config_from_policy），行为与旧程序逐日一致。
 #:
-#: 前两次都是**只增不改**，没有动过任何已有字段。v4 动了 templates 的键名，
-#: 所以解析层必须同时认旧键（v3 的 "A"、"B_TRAIN_A"…）—— 老文件照常导入，
-#: 本地存储里按旧键存的自定义模板也能读回来。
+#: v4 动了 templates 的键名，所以解析层必须同时认旧键（v3 的
+#: "A"、"B_TRAIN_A"…）—— 老文件照常导入，本地存储里按旧键存的
+#: 自定义模板也能读回来。
 #:
 #: ## 既然只是「新增一段」，为什么还要升版本号
 #:
@@ -61,7 +65,7 @@ FORMAT_ID = "timetable"
 #: 升到 v4 之后，老版本会明确拒绝：
 #: 「文件是 v4 格式，这个程序只认到 v3，请更新后再导入」——
 #: **拒绝比误解好**，这一条在任何数据交换的场合都成立。
-VERSION = 4
+VERSION = 5
 
 MAX_NODE = slots.MAX_NODE
 MAX_WEEK_LIMIT = 30
@@ -300,6 +304,10 @@ class Parsed:
     #: 自定义日型名（v4 新增，稀疏表：只有改过名的 id 才有键）。
     #: None 表示「文件里没写，不要动现有名字」。
     day_type_names: Optional[dict[DayType, str]] = None
+    #: 日型配置（v5 新增：现存日型 / 星期映射 / 早八优先层）。
+    #: None = 文件里没写。v3/v4 文件带的旧 dayTypes 段会**确定性迁移**
+    #: 成这个字段（见 config_from_policy），所以导入方只需要认它。
+    day_type_config: Optional[DayTypeConfig] = None
     #: 节数信息（可选）。None = 文件里没写，不要动现有设置。
     periods: Optional[str] = None
     warnings: list[str] = field(default_factory=list)
@@ -373,13 +381,26 @@ def parse(text: str, fallback_total_weeks: int = DEFAULT_TOTAL_WEEKS) -> Parsed:
     elif tmpl_obj is not None:
         raise FormatError("templates 必须是一个对象（用 { } 包起来）")
 
-    # ---- dayTypes 段（可选，v3）----
+    # ---- dayTypes 段（可选，v3/v4 遗留）----
+    # 读进来立刻迁移成 day_type_config —— 旧的「启用/回落」模型不再
+    # 参与运行时；这里保留 day_types 字段只是为了导入预览能展示旧文件。
     day_types: Optional[DayTypePolicy] = None
     dt_obj = root.get("dayTypes")
     if isinstance(dt_obj, dict):
         day_types = _parse_day_types(dt_obj)
     elif dt_obj is not None:
         raise FormatError("dayTypes 必须是一个对象（用 { } 包起来）")
+
+    # ---- dayTypeConfig 段（可选，v5）----
+    day_type_config: Optional[DayTypeConfig] = None
+    dtc_obj = root.get("dayTypeConfig")
+    if isinstance(dtc_obj, dict):
+        day_type_config = _parse_day_type_config(dtc_obj)
+    elif dtc_obj is not None:
+        raise FormatError("dayTypeConfig 必须是一个对象（用 { } 包起来）")
+    if day_type_config is None and day_types is not None:
+        # v3/v4 文件：旧策略确定性迁移（见 config_from_policy 的对照表）
+        day_type_config = config_from_policy(day_types)
 
     # ---- dayTypeNames 段（可选，v4）----
     day_type_names: Optional[dict[DayType, str]] = None
@@ -410,7 +431,8 @@ def parse(text: str, fallback_total_weeks: int = DEFAULT_TOTAL_WEEKS) -> Parsed:
     # 各段全空的文件导入它没有任何意义，而且多半意味着用户选错了文件、
     # 或者 AI 输出的东西是坏的 —— 明确报错比「导入成功但什么都没变」好。
     if (term is None and courses is None and templates is None
-            and day_types is None and day_type_names is None):
+            and day_types is None and day_type_names is None
+            and day_type_config is None):
         raise FormatError(
             "这份文件里 term、courses、templates、dayTypes、dayTypeNames "
             "各段都没有内容，没有可导入的东西。\n\n"
@@ -418,7 +440,7 @@ def parse(text: str, fallback_total_weeks: int = DEFAULT_TOTAL_WEEKS) -> Parsed:
         )
 
     return Parsed(term, courses, templates, day_types, day_type_names,
-                  periods, warnings)
+                  day_type_config, periods, warnings)
 
 
 def _strip_code_fence(text: str) -> str:
@@ -764,6 +786,127 @@ def day_type_by_id(id_text: str) -> Optional[DayType]:
     return _DAY_TYPE_IDS.get(str(id_text))
 
 
+def _parse_day_type_config(obj: dict[str, Any]) -> DayTypeConfig:
+    """
+    解析 `dayTypeConfig` 段（v5）—— 日型系统的全貌。
+
+    ```json
+    "dayTypeConfig": {
+      "types": ["1", "2", "5", "6", "7"],
+      "weekdayMap": ["2", "2", "2", "2", "2", "5", "6"],
+      "earlyType": "1"
+    }
+    ```
+
+    ## 校验口径
+
+    · types：非空 id 列表；**"7"（休息日）缺了自动补回** —— 它是引擎的
+      自动判定层，不存在「删掉休息日」的文件写法；
+    · weekdayMap：**恰好 7 项**（周一..周日），每一项 ∈ types 且 ≠ "7"
+      （休息日不走映射）；
+    · earlyType：可省 / null / 空串 = 不区分早八；否则 ∈ types 且 ≠ "7"。
+    """
+    raw_types = obj.get("types")
+    if not isinstance(raw_types, list) or not raw_types:
+        raise FormatError(
+            'dayTypeConfig.types 必须是非空数组，比如 ["1", "2", "5", "6", "7"]'
+            "（日型 id，最多 7 个）。"
+        )
+    types: list[DayType] = []
+    for i, item in enumerate(raw_types):
+        t = day_type_by_id(str(item))
+        if t is None:
+            raise FormatError(
+                f'dayTypeConfig.types 第 {i + 1} 项 "{item}" 不是可识别的日型 id。'
+                f"可用的值是：{_ALL_IDS_TEXT()}"
+            )
+        if t not in types:
+            types.append(t)
+    types.sort(key=lambda t: int(t.value))
+    if DayType.REST not in types:
+        # 休息日是自动判定层，删不掉 —— 文件里漏了就补回，不报错
+        types.append(DayType.REST)
+
+    raw_map = obj.get("weekdayMap")
+    if not isinstance(raw_map, list) or len(raw_map) != 7:
+        raise FormatError(
+            "dayTypeConfig.weekdayMap 必须是恰好 7 项的数组"
+            "（从周一到周日，每项是一个日型 id）。"
+        )
+    weekday_map: list[DayType] = []
+    for i, item in enumerate(raw_map):
+        t = day_type_by_id(str(item))
+        if t is None or t not in types:
+            raise FormatError(
+                f"dayTypeConfig.weekdayMap 第 {i + 1} 项（"
+                f"{WEEKDAY_CN[i + 1]}）「{item}」不是现存的日型 id。"
+                f"现存的日型是：{'、'.join(t.value for t in types)}"
+            )
+        if t is DayType.REST:
+            raise FormatError(
+                f"dayTypeConfig.weekdayMap 第 {i + 1} 项（{WEEKDAY_CN[i + 1]}）"
+                '写了 "7"（休息日）。\n休息日由引擎自动判定'
+                "（工作日全天没课），不参与星期映射。"
+            )
+        weekday_map.append(t)
+
+    raw_early = obj.get("earlyType")
+    early: Optional[DayType] = None
+    if raw_early not in (None, ""):
+        early_t = day_type_by_id(str(raw_early))
+        if early_t is None or early_t not in types:
+            raise FormatError(
+                f'dayTypeConfig.earlyType "{raw_early}" 不是现存的日型 id。'
+            )
+        if early_t is DayType.REST:
+            raise FormatError(
+                'dayTypeConfig.earlyType 写了 "7"（休息日）。\n'
+                "休息日本身由「工作日全天没课」触发，当不了早八日型。"
+            )
+        early = early_t
+
+    return DayTypeConfig(
+        types=tuple(types), weekday_map=tuple(weekday_map), early_type=early
+    )
+
+
+def _ALL_IDS_TEXT() -> str:
+    return "、".join(f'"{t.value}"' for t in sorted(DayType, key=lambda t: int(t.value)))
+
+
+def day_type_config_to_json(config: DayTypeConfig) -> str:
+    """序列化成一小段 JSON，给本地存储用（形状约定见 templates_to_json）"""
+    types_text = ", ".join(f'"{t.value}"' for t in config.types)
+    map_text = ", ".join(f'"{t.value}"' for t in config.weekday_map)
+    early_text = f'"{config.early_type.value}"' if config.early_type else "null"
+    return (
+        "{\n"
+        f'  "types": [{types_text}],\n'
+        f'  "weekdayMap": [{map_text}],\n'
+        f'  "earlyType": {early_text}\n'
+        "}"
+    )
+
+
+def day_type_config_from_json(text: str) -> DayTypeConfig:
+    """
+    读回本地存储里的日型配置。坏了返回 DEFAULT，**绝不让程序起不来**
+    （和 templates_from_json / day_types_from_json 同一个路子）。
+    """
+    if not text.strip():
+        return DayTypeConfig.DEFAULT
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError:
+        return DayTypeConfig.DEFAULT
+    if not isinstance(obj, dict):
+        return DayTypeConfig.DEFAULT
+    try:
+        return _parse_day_type_config(obj)
+    except (FormatError, TypeError, AttributeError, ValueError):
+        return DayTypeConfig.DEFAULT
+
+
 def day_type_names_from_mapping(raw: Any) -> dict[DayType, str]:
     """
     **宽容版**的名字表读取：本地存储（data.json 用户能手改）用的。
@@ -943,15 +1086,21 @@ def serialize(
     day_types: Optional[DayTypePolicy] = None,
     periods: str = DEFAULT_PERIODS,
     day_type_names: Optional[dict[DayType, str]] = None,
+    day_type_config: Optional[DayTypeConfig] = None,
     version: Optional[int] = None,
 ) -> str:
     """
     生成 JSON 文本。
 
-    [version] 缺省输出当前版本（v4）；显式传 3 走**兼容输出** ——
-    日型键用 v3 语义名、段序也复刻 v3，供 tools/verify_format_parity.py
-    与字节级回归测试继续和手机版导出对账。其他值一律 ValueError
-    （这是程序员拿错了参数，不是用户输入问题，不配 FormatError）。
+    [version] 缺省输出当前版本（v5）；显式传 3/4 走**兼容输出** ——
+    日型键用 v3 语义名、段序也复刻旧版（v3 连 dayTypes 段都是旧形状），
+    供 tools/verify_format_parity.py 与字节级回归测试继续和手机版导出
+    对账。其他值一律 ValueError（这是程序员拿错了参数，不是用户输入
+    问题，不配 FormatError）。
+
+    [day_type_config] 只在 v5 输出里出现（dayTypeConfig 段）；
+    v3/v4 兼容输出仍然写 dayTypes（由 day_types 参数给）——
+    一个版本只写它那个年代能理解的日型配置。
 
     ## 为什么手写序列化，而不用 json.dumps(indent=2)
 
@@ -967,8 +1116,8 @@ def serialize(
     **只要输出是给人看的产物，就不要把它交给第三方库的默认行为。**
     """
     ver = VERSION if version is None else version
-    if ver not in (3, 4):
-        raise ValueError(f"serialize 只支持输出 v3/v4，收到 v{ver}")
+    if ver not in (3, 4, 5):
+        raise ValueError(f"serialize 只支持输出 v3/v4/v5，收到 v{ver}")
     # v3 兼容：键用语义名、段序按当年的语义分组序；v4：键是 id、按 id 升序。
     dt_order = _V3_ORDER if ver == 3 else DAY_TYPE_ORDER
     value_of = (lambda t: _LEGACY_VALUE[t]) if ver == 3 else (lambda t: t.value)
@@ -1023,6 +1172,20 @@ def serialize(
                     + ("," if i < len(named) - 1 else "")
                 )
             lines.append("  },")
+
+    # dayTypeConfig 段（v5）：取代 dayTypes —— 「哪些日型存在 + 星期怎么映射
+    # + 早八优先层」。位置紧跟 dayTypeNames：先说有哪些日型（config）、
+    # 再说它们各自叫什么（names），读者按这个顺序理解最顺。
+    if ver >= 5 and day_type_config is not None:
+        types_text = ", ".join(f'"{t.value}"' for t in day_type_config.types)
+        map_text = ", ".join(f'"{t.value}"' for t in day_type_config.weekday_map)
+        early = (f'"{day_type_config.early_type.value}"'
+                 if day_type_config.early_type else "null")
+        lines.append('  "dayTypeConfig": {')
+        lines.append(f'    "types": [{types_text}],')
+        lines.append(f'    "weekdayMap": [{map_text}],')
+        lines.append(f'    "earlyType": {early}')
+        lines.append("  },")
 
     lines.append('  "courses": [')
     course_list = courses or []

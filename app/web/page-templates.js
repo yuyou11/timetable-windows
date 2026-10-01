@@ -130,7 +130,9 @@ async function loadTemplates() {
 }
 
 async function renderTemplates() {
-  const t = STATE.templates || await loadTemplates();
+  // 永远从后端取新 —— STATE.templates 会被别处（创建/删除日型后）改旧，
+  // 用缓存渲染会把「刚建好的日型没有标签」这类陈旧状态画出来。
+  const t = await loadTemplates();
   if (!t || !t.types) return;
 
   // ---- 日型标签 ----
@@ -142,6 +144,18 @@ async function renderTemplates() {
     btn.onclick = () => switchType(type.key);
     tabs.appendChild(btn);
   });
+
+  // 日型可以自己建：标签末尾的「＋ 新建」打开日型卡片（和设置页同一个）。
+  // 满 7 种（id 空间用完）时置灰并说明 —— 先删一个才能再建。
+  const addTab = el('button', 'type-tab add',
+    t.types.length >= 7 ? '＋ 新建（已满）' : '＋ 新建');
+  if (t.types.length >= 7) {
+    addTab.disabled = true;
+    addTab.title = '日型已满 7 种 —— 到「设置」里删掉一个不用的，再建新的';
+  } else {
+    addTab.onclick = () => newDayTypeDialog();
+  }
+  tabs.appendChild(addTab);
 
   const active = t.types.find((x) => x.key === STATE.activeType) || t.types[0];
   STATE.activeType = active.key;

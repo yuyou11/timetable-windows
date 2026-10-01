@@ -100,11 +100,11 @@ class ReminderScheduler(threading.Thread):
             today = now.date()
             minute = now.hour * 60 + now.minute
 
-            # 模板和策略成对取 —— 提醒排的时刻必须和界面显示的一致，
+            # 模板和配置成对取 —— 提醒排的时刻必须和界面显示的一致，
             # 否则会出现「界面说今天 06:55 起，闹钟却按 07:25 响」。
-            templates, policy = store.template_set()
+            templates, config = store.template_set()
             items = engine.moments(
-                today, store.week_of(today), store.courses(), templates, policy
+                today, store.week_of(today), store.courses(), templates, config
             )
 
             # 窗口取 ±1 分钟：60 秒的检查间隔下，正好能覆盖到

@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import builtin_data, dock, format_spec, skin
-from .day_type_policy import DayTypePolicy
+from .day_type_policy import DayTypeConfig, DayTypePolicy, config_from_policy
 from .format_spec import FormatError
 from .models import Block, Course, DayType, DEFAULT_DAY_TYPE_NAMES
 
@@ -635,9 +635,9 @@ class Store:
 
     def day_type_policy(self) -> DayTypePolicy:
         """
-        这份配置实际启用哪几种日型。
-
-        没设置过就是 `DayTypePolicy.DEFAULT`（A + 没早八的 B + 周末）。
+        【v5 遗留读取】旧「启用/回落」策略 —— 只剩一个用途：
+        老数据（day_types 键）迁移成新配置时的**搬运原样**。
+        新代码一律走 day_type_config()。
         """
         raw = self._data.get("day_types", "")
         if not raw:
@@ -645,22 +645,54 @@ class Store:
         # day_types_from_json 自己会在损坏时返回 DEFAULT，所以这里不用再兜底
         return format_spec.day_types_from_json(raw)
 
-    def save_day_type_policy(self, policy: DayTypePolicy) -> None:
-        self._data["day_types"] = format_spec.day_types_to_json(policy)
+    def day_type_config(self) -> DayTypeConfig:
+        """
+        日型系统的全貌：现存哪些日型、星期几映射到哪种、早八优先层。
+
+        读取优先级（高 → 低）：
+
+          1. `day_type_config` 键（v5 起写入）—— 宽容解析，坏了回默认；
+          2. `day_types` 键（v4 及更早）—— 旧策略**确定性迁移**成映射
+             （config_from_policy），迁移结果与旧程序的默认行为逐日一致；
+          3. 都没有 → DayTypeConfig.DEFAULT。
+
+        迁移是**惰性**的：不在读取时改写存储，等下一次保存配置时
+        自然写入新键 —— 和「旧模板键照常读」是同一个兼容思路。
+        """
+        raw = self._data.get("day_type_config", "")
+        if raw:
+            return format_spec.day_type_config_from_json(raw)
+        if self._data.get("day_types", ""):
+            return config_from_policy(self.day_type_policy())
+        return DayTypeConfig.DEFAULT
+
+    def save_day_type_config(self, config: DayTypeConfig) -> None:
+        self._data["day_type_config"] = format_spec.day_type_config_to_json(config)
         self.save()
 
-    def reset_day_type_policy(self) -> None:
+    def reset_day_type_config(self) -> None:
+        """清掉日型配置（新旧两个键一起清），全部回到出厂默认"""
+        self._data.pop("day_type_config", None)
         self._data.pop("day_types", None)
         self.save()
 
     @property
+    def has_custom_day_type_config(self) -> bool:
+        """用户是否**显式配置过**日型系统（创建/删除/映射/早八任一）"""
+        return bool(self._data.get("day_type_config", ""))
+
+    @property
     def has_custom_day_types(self) -> bool:
-        """用户是否**显式设置过**日型策略（没设过就是默认那套）"""
+        """
+        【v5 遗留】旧键有没有值。仅剩的用途：has_custom_schedule_config
+        里照顾「旧版本写过 day_types、还没存过新配置」的存量用户 ——
+        他们的旧配置虽然会经迁移继续生效，但复制 JSON 时得知道带上。
+        """
         return bool(self._data.get("day_types", ""))
 
-    def template_set(self) -> tuple[dict[DayType, list[Block]], DayTypePolicy]:
+    def template_set(self) -> tuple[dict[DayType, list[Block]], DayTypeConfig]:
         """
-        模板和策略**成对**返回。
+        模板和日型配置**成对**返回。
 
         ## 为什么要成对
 
@@ -674,14 +706,14 @@ class Store:
 
         （对应手机版的 `TemplateSet.policy` + `TemplateSet.custom`。）
         """
-        return self.templates(), self.day_type_policy()
+        return self.templates(), self.day_type_config()
 
     @property
     def has_custom_schedule_config(self) -> bool:
         """
         「复制 JSON」按钮该不该带上作息配置。
 
-        判据是**模板、日型、自定义名任意一个被改过**。
+        判据是**模板、日型配置、自定义名任意一个被改过**。
 
         ⚠️ 手机版这里踩过坑：以前只判断 `hasCustomTemplates`，
         于是有一类配置会丢 —— 用户导入了一份**只改 dayTypes、没改模板**的文件，
@@ -690,10 +722,11 @@ class Store:
 
         这类漏判特别隐蔽：功能没报错，只是一个字段没被带上。
         **判断「要不要带上某个东西」时，要把所有相关的来源都数一遍。**
-        （v4 加了自定义日型名 —— 这是第三个来源，判据同步扩充。）
+        （v4 加了自定义日型名、v5 加了日型配置 —— 来源每加一个就数一遍。）
         """
         return (self.has_custom_templates or self.has_custom_day_types
-                or self.has_custom_day_type_names)
+                or self.has_custom_day_type_names
+                or self.has_custom_day_type_config)
 
     # ---------------- 自定义日型名（v4）----------------
 
@@ -772,9 +805,11 @@ class Store:
             self.total_weeks,
             self.courses(),
             self.templates() if include_schedule_config else None,
-            self.day_type_policy() if include_schedule_config else None,
+            None,
             self.periods,
             day_type_names=names or None,
+            day_type_config=(self.day_type_config()
+                             if include_schedule_config else None),
         )
 
     def apply_import(self, parsed: format_spec.Parsed, mode: str) -> str:
@@ -807,11 +842,15 @@ class Store:
         if parsed.templates is not None:
             self._data["templates"] = format_spec.templates_to_json(parsed.templates)
 
-        # 日型策略同理：没带这一段就一个字都不动。
-        # 否则用户每次导入一份只改课表的文件，作息策略都会被打回默认值 ——
+        # 日型配置同理：没带这一段就一个字都不动。
+        # 否则用户每次导入一份只改课表的文件，作息配置都会被打回默认值 ——
         # 那正是「没写 = 清空」这种误解造成的典型事故。
-        if parsed.day_types is not None:
-            self._data["day_types"] = format_spec.day_types_to_json(parsed.day_types)
+        # parsed.day_type_config 对 v3/v4 文件也已经迁移好（parse 时做的），
+        # 所以这里只需要认一个字段。旧 day_types 键顺手清掉：
+        # 新键写入后旧键再留着会被误当成「还有未迁移的旧配置」。
+        if parsed.day_type_config is not None:
+            self.save_day_type_config(parsed.day_type_config)
+            self._data.pop("day_types", None)
 
         # 自定义日型名（v4）同理已在上面的导入分支里处理（走 setter 过滤+保存）。
 

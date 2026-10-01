@@ -33,8 +33,8 @@ class BallMixin:
         today = date.today()
         week = self.store.week_of(today)
         courses = self.store.courses()
-        templates, policy = self.store.template_set()
-        items = engine.moments(today, week, courses, templates, policy)
+        templates, config = self.store.template_set()
+        items = engine.moments(today, week, courses, templates, config)
 
         now = datetime.now()
         minute = now.hour * 60 + now.minute
@@ -45,7 +45,7 @@ class BallMixin:
             "ok": True,
             "week": week,
             "dayTypeLabel": engine.day_type_display(
-                today, week, courses, policy, self.store.day_type_names),
+                today, week, courses, config, self.store.day_type_names),
             "now": _moment_dict(current, minute) if current else None,
             "next": {"time": slots.fmt(nxt.start), "title": nxt.title} if nxt else None,
         }

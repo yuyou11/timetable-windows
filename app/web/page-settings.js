@@ -108,143 +108,239 @@ function renderTextColor(active, enabled) {
 }
 
 /**
- * 日型列表：勾选启用 + 改名（v4）。
+ * 「星期怎么排」+ 日型管理（v5）。
  *
- * 每个选项旁边显示**这一型的起床时间** —— 用户勾选时才看得出代价：
- * 「把工作日全勾成 A 型」意味着没早八的日子也 06:55 起床，
- * 而那正是这个程序最该帮人避免的事。
+ * 三块内容：
+ * · 早八日型下拉 —— 有早八（第 1-2 节有课）的工作日优先用它，
+ *   可选「不区分早八」（那种日子也按星期映射走）；
+ * · 星期映射 —— 周一~周日各用哪套模板（7 个下拉，改动即保存）；
+ * · 日型列表 —— 每行「编辑」打开日型卡片（名称/管星期几/删除），
+ *   列表末尾「＋ 新建日型」（满 7 种时置灰）。
  *
- * v4 的两点：
- * · 每行有「改名」按钮 —— 名字是用户数据，即时保存，不走下面的
- *   「保存日型设置」（那颗按钮只管启用/回落）；
- * · 休息日（id "7"）是引擎自动判定的一行：没有勾选框、标着「自动」，
- *   名字照样可以改。
+ * 休息日（id "7"）是引擎的自动判定层（工作日全天没课）：
+ * 不参与映射、删不掉，名字可以改。
+ *
+ * 每行显示**起床时间** —— 配置时得看得出代价：
+ * 「让周二用 A 型」意味着周二 06:55 起床，而这正是这个程序
+ * 最该帮人避免的失误。
  */
 async function renderDayTypes() {
   const d = await call('get_day_types');
   if (!d || !d.types) return;
 
+  const dayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+  const optText = (t) => `${t.label}${t.wake ? '　' + t.wake + ' 起' : ''}`;
+  const selectable = d.types.filter((t) => !t.locked);
+
+  // ---- 早八日型下拉 ----
+  const early = $('earlyTypeSel');
+  early.innerHTML = '';
+  const off = el('option', null, '不区分早八（都按星期映射）');
+  off.value = '';
+  early.appendChild(off);
+  selectable.forEach((t) => {
+    const opt = el('option', null, optText(t));
+    opt.value = t.key;
+    if (t.key === d.earlyType) opt.selected = true;
+    early.appendChild(opt);
+  });
+  early.onchange = async () => {
+    const r = await call('save_early_type', early.value);
+    if (!r.ok) {
+      await modal({ title: '保存失败', body: r.message,
+        buttons: [{ label: '知道了', value: 1, primary: true }] });
+      await renderDayTypes();
+      return;
+    }
+    toast(r.message);
+    await renderDayTypes();
+    await refreshAll();
+  };
+
+  // ---- 星期映射：七行下拉（改动即保存） ----
+  const mapBox = $('weekdayMap');
+  mapBox.innerHTML = '';
+  for (let dow = 1; dow <= 7; dow++) {
+    const row = el('div', 'field-row weekday-row');
+    row.appendChild(el('label', null, dayNames[dow - 1]));
+    const sel = el('select', 'input');
+    const owner = d.types.find((x) => x.weekdays.includes(dow));
+    selectable.forEach((t) => {
+      const opt = el('option', null, optText(t));
+      opt.value = t.key;
+      if (owner && owner.key === t.key) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sel.onchange = () => saveWeekdayMap();
+    row.appendChild(sel);
+    mapBox.appendChild(row);
+  }
+
+  // ---- 日型列表 ----
   const box = $('dayTypeList');
   box.innerHTML = '';
-
   d.types.forEach((t) => {
-    const row = el('label', 'daytype-item');
-
-    // 休息日没有勾选框：它永远生效，「启用/回落」跟它无关
-    if (!t.locked) {
-      const cb = el('input');
-      cb.type = 'checkbox';
-      cb.dataset.key = t.key;
-      cb.checked = t.enabled;
-      // 勾选变化时重建下拉框：下拉里只该出现**已勾选**的日型
-      cb.onchange = () => {
-        if (cb.checked) {
-          const opt = el('option', null, `${t.label}${t.wake ? '　' + t.wake + ' 起' : ''}`);
-          opt.value = t.key;
-          $('dayTypeFallback').appendChild(opt);
-        } else {
-          const opt = [...$('dayTypeFallback').options].find((o) => o.value === t.key);
-          if (opt) opt.remove();
-        }
-        updateDayTypeHint();
-      };
-      row.appendChild(cb);
-    }
-
+    const row = el('div', 'daytype-item');
     const text = el('div', 'daytype-text');
     text.appendChild(el('div', 'daytype-name', t.label));
-    if (t.wake) text.appendChild(el('div', 'daytype-wake', t.wake + ' 起床'));
+    const bits = [];
+    if (t.wake) bits.push(t.wake + ' 起床');
+    bits.push(t.weekdays.length
+      ? '管 ' + t.weekdays.map((w) => dayNames[w - 1]).join('、')
+      : '谁都不管');
+    text.appendChild(el('div', 'daytype-wake', bits.join(' · ')));
     row.appendChild(text);
 
-    if (t.isFallback) row.appendChild(el('span', 'daytype-badge', '当前回落'));
+    if (t.isEarly) row.appendChild(el('span', 'daytype-badge', '早八'));
     if (t.locked) row.appendChild(el('span', 'daytype-badge', '自动'));
     if (!t.isDefaultName) row.appendChild(el('span', 'daytype-badge', '已改名'));
 
-    // type="button" + preventDefault：按钮在 <label> 里，
-    // 不拦的话点「改名」会顺带切换勾选框
-    const rename = el('button', 'btn ghost mini', '改名');
-    rename.type = 'button';
-    rename.onclick = async (e) => {
-      e.preventDefault();
-      await renameDialog(d, t);
-    };
-    row.appendChild(rename);
-
+    const edit = el('button', 'btn ghost mini', '编辑');
+    edit.type = 'button';
+    edit.onclick = () => dayTypeDialog(d, t);
+    row.appendChild(edit);
     box.appendChild(row);
   });
 
-  // 下拉框只列**已勾选**的日型 —— 让用户选一个没勾的，
-  // 等于给了一个自相矛盾的控件（后端也会拦下来）
-  const sel = $('dayTypeFallback');
-  sel.innerHTML = '';
-  d.types.filter((t) => t.enabled && !t.locked).forEach((t) => {
-    const opt = el('option', null, `${t.label}${t.wake ? '　' + t.wake + ' 起' : ''}`);
-    opt.value = t.key;
-    if (t.key === d.fallback) opt.selected = true;
-    sel.appendChild(opt);
-  });
+  // ---- 新建（满 7 种置灰） ----
+  const add = $('addDayType');
+  add.disabled = d.freeIds.length === 0;
+  add.textContent = d.freeIds.length === 0 ? '＋ 新建（已满 7 种）' : '＋ 新建日型';
 
-  updateDayTypeHint();
-}
-
-function updateDayTypeHint() {
-  const n = document.querySelectorAll('#dayTypeList input:checked').length;
   const hint = $('dayTypeHint');
-  if (n === 0) {
-    hint.textContent = '至少要勾一种 —— 全都不勾的话，每一天都会落到「回落到」那一种上。';
-    hint.classList.add('warn');
-  } else {
-    hint.textContent = `已勾选 ${n} 种。没勾的日型会自动落到「回落到」选的那一套。`;
-    hint.classList.remove('warn');
-  }
+  const earlyLabel = (d.types.find((t) => t.key === d.earlyType) || {}).label;
+  hint.textContent = d.earlyType
+    ? `有早八的工作日优先用「${earlyLabel}」，其余按上面的星期映射走。`
+    : '不区分早八：所有日子都按上面的星期映射走。';
+  hint.classList.remove('warn');
 }
 
-/**
- * 改名弹窗（v4）。
- *
- * 后端 save_day_type_names 的语义是「整体替换稀疏表」，所以这里先把
- * 当前所有「已改名」的项收拢成 desired，再套用本次改动后整体提交 ——
- * 只传一个键的话，其他键会被当成「恢复默认」而静默丢失。
- *
- * 名字改动即时生效（改名的语义就是「改这个标签」，没有攒着一起
- * 提交的必要）；「保存日型设置」那颗按钮只管启用/回落。
- */
-async function renameDialog(d, t) {
-  // 当前的稀疏表：把「已改名」的行收拢（isDefaultName=false 的那些）
-  const desired = {};
-  d.types.forEach((x) => { if (!x.isDefaultName) desired[x.key] = x.label; });
-
-  const input = el('input', 'input');
-  input.type = 'text';
-  input.maxLength = 20;
-  input.value = t.label;
-  const form = el('div');
-  form.appendChild(input);
-  form.appendChild(el('p', 'hint',
-    `id ${t.key} · 名字显示在今天页、悬浮窗和导出文件里（最多 20 字）。` +
-    `清空并保存 = 恢复默认名「${t.defaultName}」。`));
-  const ok = await modal({
-    title: '给日型改名',
-    body: form,
-    buttons: [
-      { label: '取消', value: null },
-      { label: '保存', value: 1, primary: true },
-    ],
-  });
-  if (!ok) return;
-
-  const name = input.value.trim();
-  if (name === desired[t.key]) return;   // 没变化就不打扰后端
-  if (name) desired[t.key] = name;
-  else delete desired[t.key];            // 空串 = 恢复默认名
-
-  const r = await call('save_day_type_names', desired);
+/** 七个下拉的现状 → save_weekday_map（整体提交，一个选择只能有一套模板） */
+async function saveWeekdayMap() {
+  const vals = [...document.querySelectorAll('#weekdayMap select')].map((s) => s.value);
+  const r = await call('save_weekday_map', vals);
   if (!r.ok) {
-    await modal({ title: '改名失败', body: r.message, buttons: [{ label: '知道了', value: 1, primary: true }] });
+    await modal({ title: '保存失败', body: r.message,
+      buttons: [{ label: '知道了', value: 1, primary: true }] });
+    await renderDayTypes();
     return;
   }
   toast(r.message);
   await renderDayTypes();
+  await refreshAll();
+}
+
+/**
+ * 日型卡片：新建 / 编辑（名称 + 管星期几 + 删除）。
+ *
+ * 设置页和作息编辑页共用（模板页日型标签右侧的「＋ 新建」也调它）。
+ * 新建 = create_day_type + 可选 update_day_type(weekdays)；
+ * 编辑 = update_day_type（名称留空 = 不改名）；
+ * 删除在卡片里 —— 后端三道守卫（休息日 / 管着星期 / 早八日型）
+ * 会把不能删的原因写清楚。
+ */
+/** 「＋ 新建日型」入口（设置页按钮和模板页标签共用） */
+async function newDayTypeDialog() {
+  const d = await call('get_day_types');
+  if (!d || !d.types) return;
+  await dayTypeDialog(d, null);
+}
+
+async function dayTypeDialog(d, t) {
+  const isNew = !t;
+  const form = el('div');
+
+  const nameInput = el('input', 'input');
+  nameInput.type = 'text';
+  nameInput.maxLength = 20;
+  nameInput.value = isNew ? '' : t.label;
+  nameInput.placeholder = isNew ? '给新日型起个名字，例如：考试日' : t.defaultName;
+  form.appendChild(mk('日型名', nameInput, true));
+
+  // 星期勾选：新建默认不勾（建好再安排也行）；休息日不参与映射
+  const dayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+  const checks = [];
+  const dayWrap = el('div', 'weekday-checks');
+  if (t && t.locked) {
+    dayWrap.appendChild(el('p', 'hint',
+      '休息日由引擎自动判定（工作日全天没课），不参与星期映射 —— 这里只改它的名字。'));
+  } else {
+    for (let dow = 1; dow <= 7; dow++) {
+      const cb = el('input');
+      cb.type = 'checkbox';
+      cb.checked = isNew ? false : t.weekdays.includes(dow);
+      const lab = el('label', 'wd-check');
+      lab.append(cb, document.createTextNode(dayNames[dow - 1]));
+      dayWrap.appendChild(lab);
+      checks.push(cb);
+    }
+  }
+  form.appendChild(mk('管星期几（勾中的天用这一套）', dayWrap, true));
+  form.appendChild(el('p', 'hint',
+    '每个星期几只能由一种日型管 —— 勾上之后，原来管这天的自动让出。'));
+
+  const buttons = [
+    { label: '取消', value: null },
+  ];
+  if (!isNew && !t.locked) {
+    buttons.push({ label: '删除此日型', value: 'delete', danger: true });
+  }
+  buttons.push({ label: isNew ? '创建' : '保存', value: 'save', primary: true });
+
+  const v = await modal({
+    title: isNew ? '新建日型' : `编辑「${t.label}」`,
+    body: form,
+    buttons,
+  });
+  if (v === null) return;
+
+  if (v === 'delete') {
+    const ok = await confirmBox('删除日型',
+      `删除「${t.label}」后它管的天要改派给别人才能用。删除无法撤销。`, '删除');
+    if (!ok) return;
+    const r = await call('delete_day_type', t.key);
+    if (!r.ok) {
+      await modal({ title: '删不了', body: r.message,
+        buttons: [{ label: '知道了', value: 1, primary: true }] });
+      return;
+    }
+    toast(r.message);
+    await renderDayTypes();
+    await renderTemplates();
+    await refreshAll();
+    return;
+  }
+
+  const name = nameInput.value.trim();
+  const days = checks.map((cb, i) => (cb.checked ? i + 1 : 0)).filter(Boolean);
+
+  if (isNew) {
+    const r = await call('create_day_type', name);
+    if (!r.ok) {
+      await modal({ title: '建不了', body: r.message,
+        buttons: [{ label: '知道了', value: 1, primary: true }] });
+      return;
+    }
+    if (days.length) {
+      await call('update_day_type', r.newId, { weekdays: days });
+    }
+    toast(r.message);
+  } else {
+    const props = {};
+    if (name && name !== t.label) props.name = name;
+    if (!t.locked) props.weekdays = days;
+    if (Object.keys(props).length) {
+      const r = await call('update_day_type', t.key, props);
+      if (!r.ok) {
+        await modal({ title: '保存失败', body: r.message,
+          buttons: [{ label: '知道了', value: 1, primary: true }] });
+        return;
+      }
+      toast(r.message);
+    }
+  }
+  await renderDayTypes();
+  await renderTemplates();
   await refreshAll();
 }
 
