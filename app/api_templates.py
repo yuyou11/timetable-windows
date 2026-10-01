@@ -13,6 +13,7 @@ from . import engine, format_spec, slots, wake_shift
 from .day_type_policy import DayTypePolicy
 from .models import (
     DAY_TYPE_ORDER,
+    DEFAULT_DAY_TYPE_NAMES,
     Block,
     DayType,
     Kind,
@@ -183,6 +184,9 @@ class TemplatesMixin:
             types.append({
                 "key": t.value,
                 "label": day_type_name(t, names),
+                # 默认名要单独给：改名弹窗的「清空 = 恢复默认名」
+                # 需要显示恢复成什么，而 label 已经是改过的名字
+                "defaultName": DEFAULT_DAY_TYPE_NAMES[t],
                 "wake": slots.fmt(w) if w is not None else None,
                 "enabled": (t in policy.enabled) or t is DayType.REST,
                 "isFallback": t is policy.fallback,

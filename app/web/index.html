@@ -375,7 +375,8 @@
       </div>
       <p class="sub">
         程序按日历算出今天是哪种日，从下面<strong>勾选的</strong>日型里挑一套模板。
-        没勾的那种会落到「回落到」选的那一套上。
+        没勾的那种会落到「回落到」选的那一套上；标着「自动」的休息日
+        （无课的工作日）永远生效，不用勾。「改名」给日型起自己的名字。
       </p>
       <div class="daytype-list" id="dayTypeList"></div>
       <div class="field-row">
@@ -393,7 +394,7 @@
              （唯一来源是 app/__init__.py）。写死已经漂移过一次：
              程序到 2.0 的时候这里还是 v1.0。 -->
         <span id="aboutVersion">时间规划表 · 电脑版</span><br>
-        数据格式 timetable v3 —— 与手机版通用<br>
+        数据格式 timetable v4 —— 与手机版通用（v3 老文件照常导入）<br>
         所有数据存在本机，不联网、不上传
       </p>
     </div>

@@ -11,9 +11,9 @@
 // ==========================================================================
 
 // includeScheduleConfig = true 时带上**完整的作息配置**：
-// 展开的六套模板 + 启用的日型策略。两者必须一起带走 ——
+// 展开的七套模板（含休息日）+ 启用的日型策略 + 自定义日型名。必须一起带走 ——
 // 只带模板不带日型的话，别人导入后拿到的日型和你的不一样
-// （同一份模板，你只启用四种，他却六种全开）。
+// （同一份模板，你只启用四种，他却七种全开；名字不同观感也不同）。
 async function exportFile(includeScheduleConfig) {
   const r = await call('export_to_file', includeScheduleConfig);
   if (r.cancelled) return;

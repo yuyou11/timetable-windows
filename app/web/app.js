@@ -22,7 +22,7 @@ let STATE = {
   settings: null,
   courses: [],
   templates: null,
-  activeType: 'A',
+  activeType: '1',   // 默认打开第 1 套（有早八的 A 型日）；v4 起标签键是日型 id
   weekOffset: 0,
   maxNode: 10,   // 一天的小节数，boot() 后由节数信息决定（442 → 10）
 };
@@ -233,7 +233,7 @@ function bindEvents() {
   $('changeWake').onclick = () => wakeDialog();
   $('resetTemplates').onclick = async () => {
     if (!await confirmBox('恢复内置作息模板',
-      '会丢弃你改过的作息，重新使用内置的六套模板。\n\n课表不受影响。', '恢复')) return;
+      '会丢弃你改过的作息，重新使用内置的七套模板（含休息日）。\n\n课表不受影响。', '恢复')) return;
     const r = await call('reset_templates');
     if (r.ok) { STATE.templates = r.templates; renderTemplates(); toast(r.message); }
   };
@@ -313,9 +313,9 @@ function bindEvents() {
 
   $('resetDayTypes').onclick = async () => {
     if (!await confirmBox('恢复默认日型',
-      '会改成默认那四种：有早八的 A 型、没早八的 B 型、周六、周日。\n\n' +
-      '训练日（周二力量A、周四力量B）的细分会被关掉 —— '
-      + '它们来自某一份具体规划表，不是通用规律。\n\n课表和模板都不受影响。',
+      '会恢复成默认那四种：A 型日（id 1）、B 型日（id 2）、周六（id 5）、周日（id 6）。\n\n' +
+      '训练日（id 3、id 4）的细分会被关掉 —— 它们来自某一份具体规划表，'
+      + '不是通用规律。\n\n自定义的日型名也会全部还原。课表和模板都不受影响。',
       '恢复')) return;
     const r = await call('reset_day_types');
     if (r.ok) {
