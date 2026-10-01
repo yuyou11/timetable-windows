@@ -19,6 +19,34 @@
 
 from __future__ import annotations
 
+from .models import DEFAULT_DAY_TYPE_NAMES, DayType, day_type_name
+
+#: 七种日型的触发规则。**规则是格式标准的一部分，不会因为用户改名而变** ——
+#: id 与「哪天自动用这一套」的对应关系写死在这里，名字才是用户数据。
+_DAY_TYPE_RULES = {
+    "1": "工作日第 1-2 节有课（有早八）的那天自动用",
+    "2": "没有早八的普通工作日",
+    "3": "每周二",
+    "4": "每周四",
+    "5": "周六",
+    "6": "周日",
+    "7": "工作日全天没课的日子（休息日，v4 新增，可选）",
+}
+
+#: 表里日型的排列顺序：id 升序
+_DAY_TYPE_TABLE_ORDER = [
+    DayType.A, DayType.B_NORMAL, DayType.B_TRAIN_A,
+    DayType.B_TRAIN_B, DayType.SATURDAY, DayType.SUNDAY, DayType.REST,
+]
+
+
+def _day_type_table(day_type_names=None) -> str:
+    """生成提示词里那张「id → 当前名字 → 触发规则」对照表"""
+    return "\n".join(
+        f'  "{t.value}"   {day_type_name(t, day_type_names)} —— {_DAY_TYPE_RULES[t.value]}'
+        for t in _DAY_TYPE_TABLE_ORDER
+    )
+
 
 class AiPrompt:
 
@@ -34,7 +62,7 @@ class AiPrompt:
 
 {{
   "format": "timetable",
-  "version": 2,
+  "version": 4,
   "periods": "{periods}",
   "term": {{
     "name": "{term_name}",
@@ -119,8 +147,10 @@ class AiPrompt:
 """
 
     @staticmethod
-    def for_templates(term_name: str, periods: str = "442") -> str:
+    def for_templates(term_name: str, periods: str = "442",
+                      day_type_names=None) -> str:
         node_limit = sum(int(ch) for ch in periods)
+        table = _day_type_table(day_type_names)
         return f"""你是数据格式转换助手。请把我描述的日常作息转换成下面这个 JSON 格式。
 
 （这是给「{term_name}」用的）
@@ -129,10 +159,10 @@ class AiPrompt:
 
 {{
   "format": "timetable",
-  "version": 2,
+  "version": 4,
   "courses": [],
   "templates": {{
-    "A": [
+    "1": [
       {{ "start": "00:00", "end": "06:55", "title": "睡觉", "kind": "SLEEP" }},
       {{ "start": "06:55", "end": "07:10", "title": "起床、洗漱" }},
       {{ "start": "07:10", "end": "07:35", "title": "早餐", "kind": "MEAL" }},
@@ -146,16 +176,13 @@ class AiPrompt:
 
 # templates 段
 
-键是日型名称，只能从下面六个里选：
+键是**日型 id**（不是名字）。每种 id 管哪一天由程序自动判定，你不用管；
+下面是全部 7 种的当前名字和触发规则：
 
-  "A"           有早八的日子（当天第 1-2 节有课时自动用这一套）
-  "B_NORMAL"    没有早八的工作日
-  "B_TRAIN_A"   没有早八的周二（训练日·力量A）
-  "B_TRAIN_B"   没有早八的周四（训练日·力量B）
-  "SATURDAY"    周六
-  "SUNDAY"      周日
+{table}
 
 **你只需要输出我改动过的那几种**，没提到的日型会自动沿用内置模板。
+键永远写 id 数字字符串，不要写日型的名字。
 
 # 每一格（block）
 
@@ -226,6 +253,8 @@ class AiPrompt:
    （默认 "442" 即 1-10）
 6. 检查 startDate 是不是周一，格式 YYYY-MM-DD
 7. 检查 periods（如果写了）是不是 1-14 位数字、每位 1-9、各位之和不超过 14
+8. 检查 templates 的键是不是日型 id（"1" 到 "7" 的数字字符串）——
+   不是日型名字，也不是数字字面量（键必须带引号）
 
 你上次生成的 JSON（供参考）：
 

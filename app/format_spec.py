@@ -42,22 +42,26 @@ FORMAT_ID = "timetable"
 #:
 #: v1 → v2 新增了可选的 `templates` 段。
 #: v2 → v3 新增了可选的 `dayTypes` 段（启用哪些日型）。
+#: v3 → v4 日型改用 **id 1-7** 标识，并新增可选的 `dayTypeNames` 段
+#: （自定义日型名）；templates 段的键同步改成 id，且新增 "7"
+#: （休息日 —— v4 起它的模板可以随文件携带）。
 #:
-#: 两次都是**只增不改**，没有动过任何已有字段，所以老文件照常能用 ——
-#: 这就是「只增不改」原则的价值：升级格式不需要任何数据迁移。
+#: 前两次都是**只增不改**，没有动过任何已有字段。v4 动了 templates 的键名，
+#: 所以解析层必须同时认旧键（v3 的 "A"、"B_TRAIN_A"…）—— 老文件照常导入，
+#: 本地存储里按旧键存的自定义模板也能读回来。
 #:
 #: ## 既然只是「新增一段」，为什么还要升版本号
 #:
 #: 因为**老版本程序会误解新文件，而且不会报错**。
 #:
-#: v2 的程序不认识 `dayTypes`，它会照旧用六种日型跑 ——
-#: 用户明明写了「只启用 A 和周末」，装回老版本却会看到训练日又冒出来。
+#: v3 的程序不认识 `dayTypeNames`，它会照旧用内置名跑 ——
+#: 用户明明给日型改了名，装回老版本却看到「A 型日」又回来了。
 #: 这种「悄悄用错」正是版本号要防的东西。
 #:
-#: 升到 v3 之后，老版本会明确拒绝：
-#: 「文件是 v3 格式，这个程序只认到 v2，请更新后再导入」——
+#: 升到 v4 之后，老版本会明确拒绝：
+#: 「文件是 v4 格式，这个程序只认到 v3，请更新后再导入」——
 #: **拒绝比误解好**，这一条在任何数据交换的场合都成立。
-VERSION = 3
+VERSION = 4
 
 MAX_NODE = slots.MAX_NODE
 MAX_WEEK_LIMIT = 30
@@ -87,8 +91,25 @@ _DAY_NAMES = {
     "周日": 7, "周天": 7, "星期日": 7, "星期天": 7,
 }
 
-#: 日型的 JSON 键名 -> 枚举。导出和导入都靠它，保证两边一致。
-_DAY_TYPE_NAMES = {t.value: t for t in DAY_TYPE_ORDER}
+#: v4 的日型键 = id 字符串。templates 段允许全部 7 个（id 7 = 休息日，
+#: v4 起它的模板可以随文件携带）；dayTypes 段只允许前 6 个
+#: （休息日不参与启用/回落，见 models.DayType.REST 的注释）。
+_DAY_TYPE_IDS = {t.value: t for t in DayType}
+
+#: v3 及更早文件里的语义名 -> 枚举。**只进解析**（兼容老文件和
+#: 按旧键存的自定义模板），导出永远写 id。
+_LEGACY_DAY_TYPE_NAMES = {
+    "A": DayType.A,
+    "B_NORMAL": DayType.B_NORMAL,
+    "B_TRAIN_A": DayType.B_TRAIN_A,
+    "B_TRAIN_B": DayType.B_TRAIN_B,
+    "SATURDAY": DayType.SATURDAY,
+    "SUNDAY": DayType.SUNDAY,
+}
+
+#: 反向表：枚举 -> v3 语义名。只在 v3 兼容导出（serialize(version=3)，
+#: 供字节级 parity 对账）时使用。
+_LEGACY_VALUE = {t: name for name, t in _LEGACY_DAY_TYPE_NAMES.items()}
 
 #: 时段性质的名字 -> 枚举。大小写不敏感（解析时统一转大写再查）。
 _KIND_NAMES = {k.value: k for k in Kind}
@@ -276,6 +297,9 @@ class Parsed:
     #: 和 courses 一样用「None = 不动」而不是「None = 用默认」——
     #: 否则用户每次导入一份只改课表的文件，作息策略都会被打回默认值。
     day_types: Optional[DayTypePolicy] = None
+    #: 自定义日型名（v4 新增，稀疏表：只有改过名的 id 才有键）。
+    #: None 表示「文件里没写，不要动现有名字」。
+    day_type_names: Optional[dict[DayType, str]] = None
     #: 节数信息（可选）。None = 文件里没写，不要动现有设置。
     periods: Optional[str] = None
     warnings: list[str] = field(default_factory=list)
@@ -357,6 +381,14 @@ def parse(text: str, fallback_total_weeks: int = DEFAULT_TOTAL_WEEKS) -> Parsed:
     elif dt_obj is not None:
         raise FormatError("dayTypes 必须是一个对象（用 { } 包起来）")
 
+    # ---- dayTypeNames 段（可选，v4）----
+    day_type_names: Optional[dict[DayType, str]] = None
+    dtn_obj = root.get("dayTypeNames")
+    if isinstance(dtn_obj, dict):
+        day_type_names = _parse_day_type_names(dtn_obj)
+    elif dtn_obj is not None:
+        raise FormatError("dayTypeNames 必须是一个对象（用 { } 包起来）")
+
     # ---- courses 段 ----
     # 允许缺失或为空，结果是 None，含义是「不要动现有课程」。
     # 为什么允许？因为「我只想改作息，课表别动」是完全正当的需求。
@@ -375,16 +407,18 @@ def parse(text: str, fallback_total_weeks: int = DEFAULT_TOTAL_WEEKS) -> Parsed:
 
     # ---- 兜底：这份文件至少得说点什么 ----
     #
-    # 四段全空的文件导入它没有任何意义，而且多半意味着用户选错了文件、
+    # 各段全空的文件导入它没有任何意义，而且多半意味着用户选错了文件、
     # 或者 AI 输出的东西是坏的 —— 明确报错比「导入成功但什么都没变」好。
-    if term is None and courses is None and templates is None and day_types is None:
+    if (term is None and courses is None and templates is None
+            and day_types is None and day_type_names is None):
         raise FormatError(
-            "这份文件里 term、courses、templates、dayTypes 四段都没有内容，"
-            "没有可导入的东西。\n\n"
+            "这份文件里 term、courses、templates、dayTypes、dayTypeNames "
+            "各段都没有内容，没有可导入的东西。\n\n"
             "如果你是想导入课表，检查一下 courses 数组是不是空的。"
         )
 
-    return Parsed(term, courses, templates, day_types, periods, warnings)
+    return Parsed(term, courses, templates, day_types, day_type_names,
+                  periods, warnings)
 
 
 def _strip_code_fence(text: str) -> str:
@@ -546,21 +580,37 @@ def _detect_conflicts(courses: list[Course]) -> list[str]:
 # ============================================================
 
 def _day_type_names_text() -> str:
-    """报错里那份「可用的值是：A、B_TRAIN_A、…」，顺序固定"""
-    return "、".join(t.value for t in DAY_TYPE_ORDER)
+    """报错里那份「可用的值是：1、2、…、6」，顺序固定（id 升序）"""
+    return "、".join(f'"{t.value}"' for t in DAY_TYPE_ORDER)
 
 
-def _day_type_by_name(name: str) -> Optional[DayType]:
+def _template_key_to_day_type(key: str) -> Optional[DayType]:
     """
-    按名字查日型，**大小写不敏感**。
+    templates 段的键 -> 日型。
 
-    大小写不敏感是刻意的：用户手写 `"a"` 或 `"B_normal"` 都不该导入失败 ——
-    和别处解析 kind / dayOfWeek 的宽容度保持一致。
+    v4 键是 id 字符串（"1"-"7"，**精确匹配**）；v3 老键是语义名
+    （"A"、"B_TRAIN_A"…，同样精确匹配 —— 大小写宽容只给了 dayTypes 的值，
+    这里保持 v3 的原口径，让同一份老文件在两个版本里行为一致）。
+    未知键返回 None，由调用方报错。
+    """
+    found = _DAY_TYPE_IDS.get(key)
+    if found is not None:
+        return found
+    return _LEGACY_DAY_TYPE_NAMES.get(key)
+
+
+def _policy_day_type_by_name(name: str) -> Optional[DayType]:
+    """
+    dayTypes 段里的日型值 -> 枚举（**id 或 v3 旧名，大小写不敏感**）。
+
+    只认 DAY_TYPE_ORDER 里的六种：休息日（id 7）由引擎自动判定，
+    不参与启用/回落 —— 写进这段属于配置错误，调用方给专门报错。
+    大小写不敏感是刻意的：用户手写 "a" 或 "B_normal" 都不该导入失败。
     见下面 _parse_day_types 的第 ③ 条说明。
     """
     wanted = name.strip().upper()
     for t in DAY_TYPE_ORDER:
-        if t.value.upper() == wanted:
+        if t.value == wanted or _LEGACY_VALUE[t] == wanted:
             return t
     return None
 
@@ -571,10 +621,13 @@ def _parse_day_types(obj: dict[str, Any]) -> DayTypePolicy:
 
     ```json
     "dayTypes": {
-      "enabled": ["A", "B_NORMAL", "SATURDAY", "SUNDAY"],
-      "fallback": "B_NORMAL"
+      "enabled": ["1", "2", "5", "6"],
+      "fallback": "2"
     }
     ```
+
+    值是日型 id（v4）；v3 老文件里写的是语义名（"A"、"B_NORMAL"…），
+    照常接受 —— 见 _policy_day_type_by_name。
 
     ## 三个刻意的设计决定（和手机版一字不差）
 
@@ -584,8 +637,8 @@ def _parse_day_types(obj: dict[str, Any]) -> DayTypePolicy:
 
     **② `fallback` 允许不在 `enabled` 里。**
     它表达的是「用哪套模板兜底」，跟「启用了哪些日型」不是一回事。
-    比如只启用 A 和周末、却希望周中没早八时回落到 B 型，
-    就写成 `enabled: [A, SATURDAY, SUNDAY]` + `fallback: B_NORMAL`。
+    比如只启用 A 型和周末、却希望周中没早八时回落到 B 型，
+    就写成 `enabled: ["1", "5", "6"]` + `fallback: "2"`。
     这是完全正当的用法，所以不拦。
 
     **③ 名字大小写不敏感。**
@@ -595,7 +648,8 @@ def _parse_day_types(obj: dict[str, Any]) -> DayTypePolicy:
     if raw is None:
         raise FormatError(
             "dayTypes 段缺少 enabled 字段。\n"
-            '它要列出启用的日型，比如 "enabled": ["A", "B_NORMAL", "SATURDAY", "SUNDAY"]'
+            '它要列出启用的日型，比如 "enabled": ["1", "2", "5", "6"]'
+            "（1=A 型日、2=B 型日、3/4=训练日、5/6=周末，id 见格式标准）"
         )
 
     if not isinstance(raw, list):
@@ -607,18 +661,26 @@ def _parse_day_types(obj: dict[str, Any]) -> DayTypePolicy:
     if not raw:
         raise FormatError(
             "dayTypes.enabled 是空数组 —— 至少要启用一种日型。\n"
-            '如果想让「有早八 / 没早八」都能区分，用 '
-            '["A", "B_NORMAL", "SATURDAY", "SUNDAY"]。'
+            '如果想让「有早八 / 没早八」都能区分，用 ["1", "2", "5", "6"]。'
         )
 
     enabled: set[DayType] = set()
     for i, item in enumerate(raw):
         text = str(item).strip()
-        t = _day_type_by_name(text)
+        if text == DayType.REST.value:
+            # 特判要放在「未知名字」的通用报错前面 —— 写 "7" 的人不是拼错了，
+            # 是误解了休息日的定位，给一句能纠正误解的话比「可用的值是…」有用。
+            raise FormatError(
+                'dayTypes.enabled 里写了 "7"（休息日）。\n'
+                "休息日由引擎自动判定（工作日全天没课的那天），"
+                "始终生效，不参与启用/回落，所以不写进这一段。"
+            )
+        t = _policy_day_type_by_name(text)
         if t is None:
             raise FormatError(
                 f'dayTypes.enabled 第 {i + 1} 项 "{text}" 不是可识别的日型。\n'
                 f"可用的值是：{_day_type_names_text()}"
+                "（v3 旧文件里的 A、B_NORMAL 等旧名也接受）"
             )
         enabled.add(t)
 
@@ -631,15 +693,95 @@ def _parse_day_types(obj: dict[str, Any]) -> DayTypePolicy:
     if not fallback_raw:
         fallback = next(t for t in DAY_TYPE_ORDER if t in enabled)
     else:
-        fb = _day_type_by_name(fallback_raw)
+        if fallback_raw == DayType.REST.value:
+            raise FormatError(
+                'dayTypes.fallback 写了 "7"（休息日）。\n'
+                "休息日由引擎自动判定，永远兜不了底 —— "
+                "回落目标请从启用的日型里选。"
+            )
+        fb = _policy_day_type_by_name(fallback_raw)
         if fb is None:
             raise FormatError(
                 f'dayTypes.fallback "{fallback_raw}" 不是可识别的日型。\n'
                 f"可用的值是：{_day_type_names_text()}"
+                "（v3 旧文件里的 A、B_NORMAL 等旧名也接受）"
             )
         fallback = fb
 
     return DayTypePolicy(enabled=frozenset(enabled), fallback=fallback)
+
+
+#: 自定义日型名的长度上限。给得太宽用户会往名字里塞一整句话，
+#: 今天页/悬浮窗那一条横幅放不下；20 个字对「早八日」「考试周·晚起」绰绰有余。
+DAY_TYPE_NAME_MAX = 20
+
+
+def _parse_day_type_names(obj: dict[str, Any]) -> dict[DayType, str]:
+    """
+    解析 `dayTypeNames` 段（v4）—— 用户给日型起的名字。
+
+    ```json
+    "dayTypeNames": { "1": "早八日", "3": "力量日" }
+    ```
+
+    ## 宽容与严格各占哪里
+
+    · **未知的键忽略**（不是报错）—— 将来 id 集合若再扩张，
+      新版写出的键在旧版这里静默跳过即可，符合「未知字段一律忽略」的总原则；
+    · **键必须是 id**（"1"-"7"）—— v3 的语义名在这里**不**接受：
+      这段是 v4 新增的，v3 程序根本不读它，不存在老文件带着旧名进来的路径；
+    · **值要严格**：非空字符串、去首尾空白、不超过 20 字 ——
+      名字会出现在今天页和悬浮窗的一条横幅里，空串等于没改，超长必然显示不全，
+      都是直接报错让人当场改掉更好。
+    """
+    out: dict[DayType, str] = {}
+    for key, value in obj.items():
+        t = _DAY_TYPE_IDS.get(str(key))
+        if t is None:
+            continue                     # 未知 id：向前兼容，忽略
+        if not isinstance(value, str):
+            raise FormatError(
+                f'dayTypeNames."{key}" 的值必须是字符串，现在读到的是 '
+                f"{type(value).__name__}。"
+            )
+        name = value.strip()
+        if not name:
+            raise FormatError(
+                f'dayTypeNames."{key}" 是空字符串 —— 想恢复默认名就删掉这个键，'
+                "整段省略则一个名字都不动。"
+            )
+        if len(name) > DAY_TYPE_NAME_MAX:
+            raise FormatError(
+                f'dayTypeNames."{key}" 有 {len(name)} 个字，超过上限 '
+                f"{DAY_TYPE_NAME_MAX}（名字要显示在今天页和悬浮窗上）。"
+            )
+        out[t] = name
+    return out
+
+
+def day_type_by_id(id_text: str) -> Optional[DayType]:
+    """日型 id 字符串（"1"-"7"）-> 枚举。不认识返回 None。"""
+    return _DAY_TYPE_IDS.get(str(id_text))
+
+
+def day_type_names_from_mapping(raw: Any) -> dict[DayType, str]:
+    """
+    **宽容版**的名字表读取：本地存储（data.json 用户能手改）用的。
+
+    坏键、坏值一律跳过，绝不抛错 —— 存储损坏不能变成「程序打不开」。
+    （文件解析走 _parse_day_type_names，那边要严格报错，让人当场改掉。）
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[DayType, str] = {}
+    for key, value in raw.items():
+        t = day_type_by_id(key)
+        if t is None or not isinstance(value, str):
+            continue
+        name = value.strip()
+        if name and len(name) <= DAY_TYPE_NAME_MAX:
+            out[t] = name
+    return out
 
 
 def _parse_templates(obj: dict[str, Any], warnings: list[str],
@@ -647,15 +789,21 @@ def _parse_templates(obj: dict[str, Any], warnings: list[str],
     """
     只要求用户提供**想改的那几种日型**，没提供的会回落到内置模板。
     这样改一个起床时间只要写十来行，而不是把六套模板整套抄一遍。
+
+    键是日型 id（"1"-"7"，v4）；v3 老文件的语义名（"A"、"B_TRAIN_A"…）
+    照常接受（见 _template_key_to_day_type）。"7"（休息日）是 v4 新增的 ——
+    之前它的模板由程序内置、不可导出，v4 起可以自定义并随文件携带。
     """
     out: dict[DayType, list[Block]] = {}
 
     for key, value in obj.items():
-        day_type = _DAY_TYPE_NAMES.get(key)
+        day_type = _template_key_to_day_type(key)
         if day_type is None:
-            available = "、".join(t.value for t in DAY_TYPE_ORDER)
+            available = "、".join(f'"{t.value}"' for t in DAY_TYPE_ORDER)
             raise FormatError(
-                f'templates 里有无法识别的日型 "{key}"。\n可用的值是：{available}'
+                f'templates 里有无法识别的日型 "{key}"。\n'
+                f'可用的值是：{available}、"7"（休息日）\n'
+                "（v3 旧文件里的 A、B_NORMAL 等旧名也接受）"
             )
 
         if not isinstance(value, list):
@@ -775,6 +923,17 @@ def _check_template(blocks: list[Block], key: str, warnings: list[str]) -> None:
 #  四、生成
 # ============================================================
 
+#: 模板的输出顺序（v4）：id 升序，含休息日（templates 段允许键 "7"）。
+_TEMPLATE_ORDER_V4 = list(DAY_TYPE_ORDER) + [DayType.REST]
+
+#: v3 兼容输出的键序（当年的语义分组序）。仅供 serialize(version=3)，
+#: 和 DAY_TYPE_ORDER（v4 的 id 升序）是两回事，别混用。
+_V3_ORDER = [
+    DayType.A, DayType.B_TRAIN_A, DayType.B_TRAIN_B,
+    DayType.B_NORMAL, DayType.SATURDAY, DayType.SUNDAY,
+]
+
+
 def serialize(
     term_name: str,
     start_date: date,
@@ -783,9 +942,16 @@ def serialize(
     templates: Optional[dict[DayType, list[Block]]] = None,
     day_types: Optional[DayTypePolicy] = None,
     periods: str = DEFAULT_PERIODS,
+    day_type_names: Optional[dict[DayType, str]] = None,
+    version: Optional[int] = None,
 ) -> str:
     """
     生成 JSON 文本。
+
+    [version] 缺省输出当前版本（v4）；显式传 3 走**兼容输出** ——
+    日型键用 v3 语义名、段序也复刻 v3，供 tools/verify_format_parity.py
+    与字节级回归测试继续和手机版导出对账。其他值一律 ValueError
+    （这是程序员拿错了参数，不是用户输入问题，不配 FormatError）。
 
     ## 为什么手写序列化，而不用 json.dumps(indent=2)
 
@@ -800,10 +966,17 @@ def serialize(
 
     **只要输出是给人看的产物，就不要把它交给第三方库的默认行为。**
     """
+    ver = VERSION if version is None else version
+    if ver not in (3, 4):
+        raise ValueError(f"serialize 只支持输出 v3/v4，收到 v{ver}")
+    # v3 兼容：键用语义名、段序按当年的语义分组序；v4：键是 id、按 id 升序。
+    dt_order = _V3_ORDER if ver == 3 else DAY_TYPE_ORDER
+    value_of = (lambda t: _LEGACY_VALUE[t]) if ver == 3 else (lambda t: t.value)
+
     lines: list[str] = []
     lines.append("{")
     lines.append(f'  "format": "{FORMAT_ID}",')
-    lines.append(f'  "version": {VERSION},')
+    lines.append(f'  "version": {ver},')
 
     # 节数信息：只有和默认结构不同才写出来。
     # ⚠️ 不能无条件写 —— 和手机版导出的文件有逐字节的同源约定
@@ -830,12 +1003,26 @@ def serialize(
     # 所以这个位置不是随便挑的。
     if day_types is not None:
         enabled_text = ", ".join(
-            f'"{t.value}"' for t in DAY_TYPE_ORDER if t in day_types.enabled
+            f'"{value_of(t)}"' for t in dt_order if t in day_types.enabled
         )
         lines.append('  "dayTypes": {')
         lines.append(f'    "enabled": [{enabled_text}],')
-        lines.append(f'    "fallback": "{day_types.fallback.value}"')
+        lines.append(f'    "fallback": "{value_of(day_types.fallback)}"')
         lines.append("  },")
+
+    # dayTypeNames 段（v4）：用户给日型起的名字，稀疏表 —— 只有改过名的
+    # id 才有键，没改过的不写（写了也是默认值，纯噪音）。位置紧跟
+    # dayTypes：两段都在描述「日型这套系统」，名字是策略的邻居。
+    if ver >= 4 and day_type_names:
+        named = [t for t in _TEMPLATE_ORDER_V4 if t in day_type_names]
+        if named:
+            lines.append('  "dayTypeNames": {')
+            for i, t in enumerate(named):
+                lines.append(
+                    f'    "{t.value}": "{_escape(day_type_names[t])}"'
+                    + ("," if i < len(named) - 1 else "")
+                )
+            lines.append("  },")
 
     lines.append('  "courses": [')
     course_list = courses or []
@@ -874,15 +1061,29 @@ def serialize(
     lines.append("  ]" + ("," if has_trailing_segments else ""))
 
     if templates:
-        lines.extend(_serialize_templates(templates))
+        lines.extend(_serialize_templates(
+            templates,
+            order=dt_order if ver == 3 else _TEMPLATE_ORDER_V4,
+            key_of=value_of,
+        ))
 
     lines.append("}")
     return "\n".join(lines) + "\n"
 
 
-def _serialize_templates(templates: dict[DayType, list[Block]], with_key: bool = True) -> list[str]:
+def _serialize_templates(
+    templates: dict[DayType, list[Block]],
+    with_key: bool = True,
+    order: Optional[list[DayType]] = None,
+    key_of=None,
+) -> list[str]:
     """
-    按 DAY_TYPE_ORDER 的固定顺序输出，保证同一份数据每次导出结果完全一致。
+    按固定顺序输出，保证同一份数据每次导出结果完全一致。
+
+    [order] 缺省按 v4 的 id 升序（含休息日）；v3 兼容输出传入 _V3_ORDER。
+    [key_of] 把日型映射成文件里的键字符串：v4 是 id（t.value），
+    v3 兼容输出传语义名（_LEGACY_VALUE）。两个参数必须成对给 ——
+    「v3 的顺序配 v4 的键」这种半吊子组合只会产出谁也读不了的文件。
 
     ## with_key 这个参数是踩坑之后加的
 
@@ -898,14 +1099,19 @@ def _serialize_templates(templates: dict[DayType, list[Block]], with_key: bool =
 
     这类「不报错的错」最危险，因为它看起来一切正常。
     """
+    if (order is None) != (key_of is None):
+        raise ValueError("order 和 key_of 必须成对提供")
+    order = order if order is not None else _TEMPLATE_ORDER_V4
+    key_of = key_of if key_of is not None else (lambda t: t.value)
+
     out: list[str] = ['  "templates": {'] if with_key else ["{"]
     indent = "    " if with_key else "  "
     inner = "      " if with_key else "    "
-    types = [t for t in DAY_TYPE_ORDER if t in templates]
+    types = [t for t in order if t in templates]
 
     for ti, day_type in enumerate(types):
         blocks = templates[day_type]
-        out.append(f'{indent}"{day_type.value}": [')
+        out.append(f'{indent}"{key_of(day_type)}": [')
         for bi, b in enumerate(blocks):
             parts = [
                 f'"start": "{slots.fmt(b.start)}"',

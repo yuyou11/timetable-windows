@@ -42,54 +42,98 @@ class DayType(str, Enum):
 
     注意：**这个类型不是按星期几写死的，而是每天现算的**。
     判断依据只有一条 —— 今天第 1-2 节有没有课。见 engine.day_type()。
+
+    ## v4：值是日型 id（"1"-"7"），不是语义名
+
+    自定义日型上线后（格式 v4），日型在文件、存储、前端里的身份是
+    **id 1-7**；成员名（A / B_TRAIN_A / …）只是代码里的语义别名，
+    方便引擎和测试读。id 与规则的对应关系见 DEFAULT_DAY_TYPE_NAMES
+    上方的表格，这是**格式标准的一部分**，改名也不能动：
+
+        id 1  工作日有早八（第 1-2 节有课）
+        id 2  无早八的普通工作日
+        id 3  周二
+        id 4  周四
+        id 5  周六
+        id 6  周日
+        id 7  工作日全天无课（休息日，自动判定，不可禁用）
+
+    v3 及更早的文件里写的是语义名（"A"、"B_TRAIN_A"…），
+    解析层负责翻译成 id —— 见 format_spec 的双键解析。
     """
 
-    A = "A"                    # 有早八
-    B_TRAIN_A = "B_TRAIN_A"    # 周二 · 力量 A
-    B_TRAIN_B = "B_TRAIN_B"    # 周四 · 力量 B
-    B_NORMAL = "B_NORMAL"      # 无早八的普通工作日
-    SATURDAY = "SATURDAY"
-    SUNDAY = "SUNDAY"
-    REST = "REST"              # 全天没课的休息日（假期 / 停课 / 课表没排到的那天）
+    A = "1"                    # 工作日有早八（原 v3 的 "A"）
+    B_NORMAL = "2"             # 无早八的普通工作日（原 "B_NORMAL"）
+    B_TRAIN_A = "3"            # 周二（原 "B_TRAIN_A"，训练日 · 力量A）
+    B_TRAIN_B = "4"            # 周四（原 "B_TRAIN_B"，训练日 · 力量B）
+    SATURDAY = "5"             # 周六（原 "SATURDAY"）
+    SUNDAY = "6"               # 周日（原 "SUNDAY"）
+    REST = "7"                 # 工作日全天无课（原 "REST"，休息日）
 
-    # ⚠️ REST **故意不进** DAY_TYPE_ORDER。它不是用户可选的日型，
+    # ⚠️ REST（id 7）**故意不进** DAY_TYPE_ORDER。它不是用户可启停的日型，
     # 而是引擎从课表推导出来的状态 ——「那天没课」是客观事实，不是偏好。
     # 不进 ORDER 的连锁效果全部是故意的：
-    #   · 文件里写不了它（_DAY_TYPE_NAMES 按 ORDER 构建，含 REST 的文件
-    #     在导入时报错，和手机版行为一致）
-    #   · 导出 / 本地存储永远不会带它（序列化按 ORDER 过滤）
-    #   · 设置页的日型勾选、作息编辑页的标签都不会出现它
-    # 它的模板内容来自 builtin_data（用户数据不需要、也不能定义它）。
+    #   · 文件的 dayTypes 段（启用/回落）写不了它 —— 写 "7" 会报错
+    #   · 设置页的日型勾选、回落下拉都不会出现它
+    # 与 v3 的区别：它的**名字和模板**在 v4 里可以自定义、可以随文件导出
+    # （templates 段允许键 "7"）—— 只是「哪天算休息日」这件事仍然由引擎定。
+
+    def __str__(self) -> str:  # pragma: no cover - 调试便利，非行为路径
+        return self.value
 
 
-DAY_TYPE_LABEL = {
-    # ⚠️ A 的文案是「A 型日」，**不带「有早八」**。
-    #
-    # 原来写的是「A 型日 · 有早八」。加了日型策略之后，这句话会变成假话：
-    # 用户可以把没早八的工作日全部回落到 A 型模板，于是周二（当天没课）
-    # 也会被标成「A 型日 · 有早八」。
-    #
-    # 根子在于它把两件独立的事焊在了一起：
-    #   · **用哪套模板** —— 由策略决定（DayTypePolicy.resolve）
-    #   · **今天有没有早八** —— 由日历决定（engine.natural_day_type）
-    #
-    # 拆开之后，需要连起来显示的地方调 engine.day_type_display()。
-    # **凡是「一个字段同时表达两件事」的地方，等其中一件事能独立变化时就会出问题。**
+#: 七种日型的默认名字。**文案与 v3 的 DAY_TYPE_LABEL 逐字相同** ——
+#: v4 只是让它们变成「可以改的默认值」，默认观感不变。
+#:
+#: ⚠️ A 的文案是「A 型日」，**不带「有早八」**。
+#:
+#: 原来写的是「A 型日 · 有早八」。加了日型策略之后，这句话会变成假话：
+#: 用户可以把没早八的工作日全部回落到 A 型模板，于是周二（当天没课）
+#: 也会被标成「A 型日 · 有早八」。
+#:
+#: 根子在于它把两件独立的事焊在了一起：
+#:   · **用哪套模板** —— 由策略决定（DayTypePolicy.resolve）
+#:   · **今天有没有早八** —— 由日历决定（engine.natural_day_type）
+#:
+#: 拆开之后，需要连起来显示的地方调 engine.day_type_display()。
+#: **凡是「一个字段同时表达两件事」的地方，等其中一件事能独立变化时就会出问题。**
+DEFAULT_DAY_TYPE_NAMES: dict[DayType, str] = {
     DayType.A: "A 型日",
+    DayType.B_NORMAL: "B 型日",
     DayType.B_TRAIN_A: "B 型日 · 训练日 力量A",
     DayType.B_TRAIN_B: "B 型日 · 训练日 力量B",
-    DayType.B_NORMAL: "B 型日",
     DayType.SATURDAY: "周六",
     DayType.SUNDAY: "周日",
-    # REST 不在 DAY_TYPE_ORDER 里（理由见枚举上的注释），但显示文案要有 ——
-    # 今天页、悬浮窗的日型描述都会用到。
+    # REST（id 7）不在 DAY_TYPE_ORDER 里（理由见枚举上的注释），但显示文案要有 ——
+    # 今天页、悬浮窗的日型描述都会用到。v4 起它也可以被用户改名。
     DayType.REST: "无课 · 休息日",
 }
 
-#: 六种日型的固定顺序。导出、界面展示都依赖它保持稳定
+
+def day_type_name(t: DayType, custom: Optional[dict[DayType, str]] = None) -> str:
+    """
+    当前生效的日型名：**自定义优先，没改过用默认**。
+
+    `custom` 是 store 里那份稀疏的名字表（只有用户改过的 id 才有键）。
+    所有「界面要显示日型名」的地方都应该走这里，而不是直接查
+    DEFAULT_DAY_TYPE_NAMES —— 否则用户的改名在某些页面会静默失效。
+    """
+    if custom:
+        name = custom.get(t)
+        if name:
+            return name
+    return DEFAULT_DAY_TYPE_NAMES[t]
+
+
+#: 六种可启用日型的固定顺序（id 升序，REST/id 7 不在其中）。
+#: 文件 dayTypes 段的输出顺序、设置页/编辑页的列表顺序都依赖它保持稳定。
+#:
+#: ⚠️ 与 v3 的顺序不同（v3 是 A、训A、训B、B、周六、周日的语义分组序）。
+#: v4 文件按 id 升序输出；需要复刻 v3 字节级输出的地方（parity 守卫）
+#: 用 format_spec 里私有的旧序常量，两者互不干扰。
 DAY_TYPE_ORDER = [
-    DayType.A, DayType.B_TRAIN_A, DayType.B_TRAIN_B,
-    DayType.B_NORMAL, DayType.SATURDAY, DayType.SUNDAY,
+    DayType.A, DayType.B_NORMAL, DayType.B_TRAIN_A,
+    DayType.B_TRAIN_B, DayType.SATURDAY, DayType.SUNDAY,
 ]
 
 

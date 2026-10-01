@@ -26,7 +26,13 @@ from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
 from . import __version__, engine, format_spec, skin, slots
-from .models import DAY_TYPE_LABEL, DAY_TYPE_ORDER, Course, Kind
+from .models import (
+    DAY_TYPE_ORDER,
+    Course,
+    DayType,
+    Kind,
+    day_type_name,
+)
 from .store import Store
 
 #: 一周七天（周一=1 … 周日=7）。
@@ -119,7 +125,12 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
             # 重复应用无害（和 theme 兜底是同一个思路）。
             "skin": self._skin_dict(),
             "today": self.get_today(),
-            "dayTypes": [{"key": t.value, "label": DAY_TYPE_LABEL[t]} for t in DAY_TYPE_ORDER],
+            # 七行全给（含休息日）：前端哪一页要显示日型名，都以这里的
+            # label 为准 —— 名字是用户数据（v4），不能让前端再抄一份默认值。
+            "dayTypes": [
+                {"key": t.value, "label": day_type_name(t, self.store.day_type_names)}
+                for t in DAY_TYPE_ORDER + [DayType.REST]
+            ],
             "kinds": [k.value for k in Kind],
             "maxNode": self.store.node_count,
             "maxWeeks": format_spec.MAX_WEEK_LIMIT,
@@ -201,7 +212,8 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
             # 用 day_type_display 而不是 DAY_TYPE_LABEL：后者只说「用哪套模板」，
             # 而「今天有没有早八」是日历决定的另一件事 —— 自定义策略下
             # 两者会分家（把工作日全落到 A 型时，「A 型日·有早八」就是假话）。
-            "dayTypeLabel": engine.day_type_display(today, week, courses, policy),
+            "dayTypeLabel": engine.day_type_display(
+                today, week, courses, policy, self.store.day_type_names),
             "now": _moment_dict(current, now_minute) if current else None,
             "next": (
                 {"time": slots.fmt(nxt.start), "title": nxt.title} if nxt else None
@@ -232,7 +244,8 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
         return {
             "weekday": format_spec.WEEKDAY_CN[tomorrow.isoweekday()],
             "week": week,
-            "dayTypeLabel": engine.day_type_display(tomorrow, week, courses, policy),
+            "dayTypeLabel": engine.day_type_display(
+                tomorrow, week, courses, policy, self.store.day_type_names),
             "wake": slots.fmt(wake) if wake is not None else None,
             "wakeMinutes": wake,
             "first": (

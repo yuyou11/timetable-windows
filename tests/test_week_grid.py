@@ -112,11 +112,11 @@ class TestSevenDayColumns(WeekGridTestCase):
         周六周日必须用各自的日型模板，而不是被当成普通工作日。
 
         这条保证「周末」不只是多了两列空格子 —— 它的作息、
-        起床时间都该按 SATURDAY / SUNDAY 那两套走。
+        起床时间都该按周六 / 周日那两套走（v4 里对应 id "5" / "6"）。
         """
         w = self.api.get_week(0)
-        self.assertEqual("SATURDAY", w["days"][5]["dayType"])
-        self.assertEqual("SUNDAY", w["days"][6]["dayType"])
+        self.assertEqual("5", w["days"][5]["dayType"])
+        self.assertEqual("6", w["days"][6]["dayType"])
 
 
 class TestRowCellAlignment(WeekGridTestCase):

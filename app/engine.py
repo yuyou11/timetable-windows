@@ -23,7 +23,14 @@ from typing import Iterable, Optional, Sequence
 
 from . import slots
 from .day_type_policy import DayTypePolicy
-from .models import DAY_TYPE_LABEL, Block, Course, DayType, Kind, Moment
+from .models import (
+    Block,
+    Course,
+    DayType,
+    Kind,
+    Moment,
+    day_type_name,
+)
 
 #: 午前 / 午后的分界线，用于判断「上午的睡眠段」
 NOON = 12 * 60
@@ -166,13 +173,17 @@ def day_type_display(
     week: int,
     courses: Iterable[Course],
     policy: DayTypePolicy,
+    names: Optional[dict[DayType, str]] = None,
 ) -> str:
     """
     界面上显示的日型描述 —— 会区分「用哪套模板」和「今天有没有早八」。
 
+    [names] 是 store 里的自定义日型名（v4）；不传或传空就用默认名。
+    引擎本身不碰 store，所以名字只能由调用方带进来。
+
     ## 为什么需要单独一个函数
 
-    `DAY_TYPE_LABEL` 只说明「这套模板叫什么」。但用户看到今天标着
+    默认名只说明「这套模板叫什么」。但用户看到今天标着
     「A 型日」时，自然会想知道今天要不要早起 —— 而这**不能从标签推出来**：
 
         默认配置下    A 型日 ⟺ 当天第 1-2 节有课（有早八）
@@ -189,7 +200,7 @@ def day_type_display(
     # REST 的短路在 _used_type 里（曾在这里和 day_type 各写一遍，
     # 抽成共用的一段之后映射规则只有一个定义点）
     used = _used_type(natural, policy)
-    label = DAY_TYPE_LABEL[used]
+    label = day_type_name(used, names)
     return f"{label} · 有早八" if natural is DayType.A else label
 
 

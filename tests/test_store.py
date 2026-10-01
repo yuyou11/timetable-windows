@@ -335,11 +335,12 @@ class TestFrozenJsonKeys(StoreTestCase):
         raw = self.raw()
         self.assertIsInstance(raw["templates"], str, "模板必须是字符串，不是对象")
         inner = json.loads(raw["templates"])
-        self.assertEqual(["A"], list(inner))
-        self.assertEqual("00:00", inner["A"][0]["start"])
-        self.assertEqual("07:30", inner["A"][0]["end"])
-        self.assertEqual("24:00", inner["A"][1]["end"])
-        self.assertEqual("SLEEP", inner["A"][0]["kind"])
+        # v4 起键是日型 id（"1" = 原 A 型日）
+        self.assertEqual(["1"], list(inner))
+        self.assertEqual("00:00", inner["1"][0]["start"])
+        self.assertEqual("07:30", inner["1"][0]["end"])
+        self.assertEqual("24:00", inner["1"][1]["end"])
+        self.assertEqual("SLEEP", inner["1"][0]["kind"])
 
 
 # ============================================================
@@ -1308,6 +1309,71 @@ class TestCachingAndBatch(StoreTestCase):
         self.assertEqual((120, 88), back.ball_pos)
         self.assertEqual("right", back.ball_edge)
         self.assertEqual(300, back.ball_center)
+
+
+class TestDayTypeNames(StoreTestCase):
+    """自定义日型名（v4）的存储契约"""
+
+    def test_sparse_roundtrip(self):
+        """改过的名字落盘；默认名不进存储（稀疏表只记「改过的」）"""
+        self.store.day_type_names = {
+            DayType.A: "早八日",
+            DayType.B_NORMAL: "B 型日",     # 等于默认名 → 应被剔除
+        }
+        back = self.reopen()
+        self.assertEqual({DayType.A: "早八日"}, back.day_type_names)
+        self.assertTrue(back.has_custom_day_type_names)
+
+    def test_empty_string_restores_default(self):
+        """空串语义 = 恢复这个 id 的默认名（从稀疏表里删掉）"""
+        self.store.day_type_names = {DayType.A: "早八日"}
+        self.store.day_type_names = {DayType.A: ""}
+        self.assertEqual({}, self.reopen().day_type_names)
+
+    def test_corrupt_storage_is_tolerated(self):
+        """data.json 是用户能手改的：坏键坏值跳过，不许让程序起不来"""
+        self.write_raw_obj({"day_type_names": {"1": "早八日", "99": 123, "3": ["坏"]}})
+        back = Store(path=self.data_path)
+        self.assertEqual({DayType.A: "早八日"}, back.day_type_names)
+
+    def test_export_import_roundtrip_with_names(self):
+        """导出带 dayTypeNames；导入后名字原样回来（没写 = 不动）"""
+        self.store.day_type_names = {DayType.A: "早八日", DayType.REST: "躺平日"}
+        text = self.store.export_json(include_schedule_config=True)
+
+        self.assertIn("dayTypeNames", text)
+        other = Store(path=self.dir / "other.json")
+        msg = other.apply_import(
+            format_spec.parse(text, 19), "replace",
+        )
+        self.assertIn("自定义日型名 2 个", msg)
+        self.assertEqual(
+            {DayType.A: "早八日", DayType.REST: "躺平日"},
+            other.day_type_names,
+        )
+
+    def test_import_without_names_leaves_names_untouched(self):
+        """文件里没写 dayTypeNames → 名字一个都不动（「没写 = 不动」）"""
+        self.store.day_type_names = {DayType.A: "早八日"}
+        p = self.parsed(courses=[
+            {"name": "课", "dayOfWeek": 1, "nodes": [1, 2], "weeks": "1"},
+        ])
+        self.store.apply_import(p, "replace")
+        self.assertEqual({DayType.A: "早八日"}, self.store.day_type_names)
+
+    def test_legacy_template_keys_in_storage_still_load(self):
+        """升级路径：老 data.json 里按 v3 旧键（"A"）存的自定义模板照常读回"""
+        legacy = json.dumps({
+            "A": [{"start": "00:00", "end": "07:30", "title": "睡觉", "kind": "SLEEP"},
+                  {"start": "07:30", "end": "24:00", "title": "旧存储的一天"}],
+        }, ensure_ascii=False)
+        self.write_raw_obj({"templates": legacy, "courses": []})
+
+        back = Store(path=self.data_path)
+        merged = back.templates()
+        self.assertEqual("旧存储的一天", merged[DayType.A][-1].title,
+                         "旧键模板没有迁移进来")
+        self.assertIn("旧存储的一天", [c.title for c in back.custom_templates()[DayType.A]])
 
 
 if __name__ == "__main__":

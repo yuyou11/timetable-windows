@@ -549,7 +549,9 @@ class TestDocumentParsing(unittest.TestCase):
             format_spec.parse(raw)
         msg = str(cm.exception)
         self.assertIn("MONDAY", msg)
-        self.assertIn("SATURDAY", msg)
+        # v4 的可用值表是 id（含休息日 "7"），并提示 v3 旧名也接受
+        self.assertIn('"7"', msg)
+        self.assertIn("旧名", msg)
 
     def test_end_can_be_24_but_start_cannot(self):
         ok = '"templates":{"A":[{"start":"23:00","end":"24:00","title":"睡前"}]}'
@@ -598,10 +600,9 @@ class TestRoundTrip(unittest.TestCase):
         text = format_spec.serialize("测试", TERM_START, 19, builtin_data.courses(), templates)
         back = format_spec.parse(text).templates
 
-        # REST 故意不进文件（不在 DAY_TYPE_ORDER 里，理由见 models 的注释），
-        # 往返后剩下的是六套标准日型；REST 的模板永远来自内置，不依赖往返。
-        self.assertNotIn(DayType.REST, back)
-        self.assertEqual(6, len(back))
+        # v4 起休息日（id 7）也是一等公民：模板随文件往返，
+        # 七套全部能回来 —— 不再是 v3 的「REST 永远只从内置来」。
+        self.assertEqual(7, len(back))
         for day_type in back:
             self.assertEqual(
                 _sig_blocks(templates[day_type]),
@@ -732,14 +733,12 @@ class TestTemplatePersistence(unittest.TestCase):
         self.assertEqual("00:00", slots.fmt(back[DayType.A][0].start))
         self.assertEqual("06:55", slots.fmt(back[DayType.A][0].end))
 
-    def test_all_six_roundtrip(self):
+    def test_all_seven_roundtrip(self):
         original = builtin_data.templates()
         back = format_spec.templates_from_json(format_spec.templates_to_json(original))
 
-        # REST 存不进去是**故意的**（它不在 DAY_TYPE_ORDER 里，见 models）——
-        # 本地存储和文件一样只装六套标准日型，REST 永远从内置来。
-        self.assertNotIn(DayType.REST, back)
-        self.assertEqual(6, len(back))
+        # v4 起休息日（id 7）也进本地存储和文件 —— 七套全部可往返
+        self.assertEqual(7, len(back))
         for day_type in back:
             self.assertEqual(
                 _sig_blocks(original[day_type]),
@@ -928,6 +927,9 @@ class TestRealPhoneExport(unittest.TestCase):
         original = self.PHONE_EXPORT.read_text(encoding="utf-8")
         p = format_spec.parse(original, fallback_total_weeks=19)
 
+        # 手机版还是 v3，所以这里用 **v3 兼容输出**对账：
+        # 桌面版日常导出是 v4（id 键 + dayTypeNames），但解析 v3、
+        # 按原样重发 v3 的能力必须一直都在 —— 它是「格式对齐」的证据链。
         rebuilt = format_spec.serialize(
             term_name=p.term.name,
             start_date=p.term.start_date,
@@ -935,6 +937,7 @@ class TestRealPhoneExport(unittest.TestCase):
             courses=p.courses,
             templates=p.templates,
             day_types=p.day_types,
+            version=3,
         )
 
         # 只归一化换行符 —— CRLF/LF 是检出产物，不是格式差异

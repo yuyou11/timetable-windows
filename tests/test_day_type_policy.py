@@ -356,7 +356,24 @@ class TestParseDayTypes(unittest.TestCase):
     def test_unknown_name_lists_the_available_ones(self):
         msg = self.failed(self.doc('{"enabled":["A","FOO"],"fallback":"A"}'))
         self.assertIn("第 2 项", msg)
-        self.assertIn("B_TRAIN_A", msg)
+        self.assertIn('"3"', msg, "可用值表按 id 升序列出（3 = 训练日A）")
+
+    def test_reads_v4_id_keys(self):
+        """v4 文件里写 id；id 与旧名指向同一种日型"""
+        p = self.parsed(
+            self.doc('{"enabled":["1","5","6"],"fallback":"2"}')
+        ).day_types
+        self.assertEqual(
+            frozenset({DayType.A, DayType.SATURDAY, DayType.SUNDAY}), p.enabled
+        )
+        self.assertEqual(DayType.B_NORMAL, p.fallback)
+
+    def test_rest_id_is_refused_everywhere_in_the_segment(self):
+        """休息日（id 7）由引擎自动判定：写进 enabled 或 fallback 都要报错"""
+        msg = self.failed(self.doc('{"enabled":["1","7"],"fallback":"1"}'))
+        self.assertIn("休息日", msg)
+        msg = self.failed(self.doc('{"enabled":["1"],"fallback":"7"}'))
+        self.assertIn("休息日", msg)
 
     def test_fallback_defaults_to_first_enabled_in_standard_order(self):
         """
@@ -379,7 +396,7 @@ class TestParseDayTypes(unittest.TestCase):
 
     def test_all_four_empty_is_an_error(self):
         msg = self.failed('{"format":"timetable","version":3}')
-        for segment in ("term", "courses", "templates", "dayTypes"):
+        for segment in ("term", "courses", "templates", "dayTypes", "dayTypeNames"):
             self.assertIn(segment, msg, f"报错里应当提到 {segment} 这一段")
 
     def test_enabled_must_be_an_array(self):
@@ -412,6 +429,14 @@ class TestParseDayTypes(unittest.TestCase):
 # ============================================================
 
 class TestSerializeDayTypes(unittest.TestCase):
+    def parsed(self, json_text: str) -> format_spec.Parsed:
+        return format_spec.parse(json_text, 19)
+
+    def failed(self, json_text: str) -> str:
+        with self.assertRaises(format_spec.FormatError) as cm:
+            format_spec.parse(json_text, 19)
+        return str(cm.exception)
+
     def test_roundtrip_through_a_full_file(self):
         policy = DayTypePolicy(
             enabled=frozenset({DayType.A, DayType.SATURDAY, DayType.SUNDAY}),
@@ -441,8 +466,86 @@ class TestSerializeDayTypes(unittest.TestCase):
         )
         self.assertEqual(format_spec.day_types_to_json(a),
                          format_spec.day_types_to_json(b))
-        self.assertIn('["A", "SATURDAY", "SUNDAY"]',
+        # v4 起输出按 id 升序（1=A 型日、5=周六、6=周日）
+        self.assertIn('["1", "5", "6"]',
                       format_spec.day_types_to_json(a))
+
+    def test_day_type_names_section_roundtrip(self):
+        """v4 的 dayTypeNames 段：导出 → 解析往返，名字原样回来"""
+        names = {DayType.A: "早八日", DayType.REST: "躺平日"}
+        text = format_spec.serialize(
+            "学期", TERM_START, 19, [],
+            builtin_data.templates(), DayTypePolicy.DEFAULT,
+            day_type_names=names,
+        )
+        p = format_spec.parse(text, 19)
+        self.assertEqual(names, p.day_type_names)
+
+    def test_day_type_names_position_is_fixed(self):
+        """dayTypeNames 紧跟 dayTypes、在 courses 之前 —— 段序是字节契约的一部分"""
+        text = format_spec.serialize(
+            "学期", TERM_START, 19, [],
+            builtin_data.templates(), DayTypePolicy.DEFAULT,
+            day_type_names={DayType.A: "早八日"},
+        )
+        i_dt = text.index('"dayTypes"')
+        i_dtn = text.index('"dayTypeNames"')
+        i_courses = text.index('"courses"')
+        self.assertLess(i_dt, i_dtn)
+        self.assertLess(i_dtn, i_courses)
+
+    def test_day_type_names_omitted_writes_no_segment(self):
+        """没改过名就不写这一段 —— 输出永远干净"""
+        text = format_spec.serialize(
+            "学期", TERM_START, 19, [], builtin_data.templates(),
+            DayTypePolicy.DEFAULT,
+        )
+        self.assertNotIn("dayTypeNames", text)
+
+    def test_day_type_names_only_file_is_valid_content(self):
+        """只带名字的文件是正当的：名字也是配置的一部分"""
+        raw = ('{"format":"timetable","version":4,'
+               '"dayTypeNames":{"1":"早八日"}}')
+        p = self.parsed(raw)
+        self.assertIsNone(p.courses)
+        self.assertEqual({DayType.A: "早八日"}, p.day_type_names)
+
+    def test_day_type_names_unknown_key_is_ignored(self):
+        """段里出现未知 id：向前兼容，静默跳过而不是报错"""
+        raw = ('{"format":"timetable","version":4,'
+               '"dayTypeNames":{"1":"早八日","99":"未来的日型"}}')
+        self.assertEqual({DayType.A: "早八日"}, self.parsed(raw).day_type_names)
+
+    def test_day_type_names_value_validation(self):
+        """值要严格：空串报错、超长报错、非字符串报错"""
+        msg = self.failed('{"format":"timetable","version":4,'
+                          '"dayTypeNames":{"1":"  "}}')
+        self.assertIn("空", msg)
+
+        msg = self.failed('{"format":"timetable","version":4,'
+                          '"dayTypeNames":{"1":"' + "x" * 21 + '"}}')
+        self.assertIn("20", msg)
+
+        msg = self.failed('{"format":"timetable","version":4,'
+                          '"dayTypeNames":{"1":123}}')
+        self.assertIn("字符串", msg)
+
+    def test_v3_legacy_keys_still_parse_everywhere(self):
+        """v3 老文件的语义名在 templates / dayTypes 两段都照常接受"""
+        raw = ('{"format":"timetable","version":3,'
+               '"dayTypes":{"enabled":["A","SUNDAY"]},'
+               '"templates":{"A":[{"start":"00:00","end":"24:00","title":"x"}]}}')
+        p = self.parsed(raw)
+        self.assertIn(DayType.A, p.day_types.enabled)
+        self.assertIn(DayType.A, p.templates)
+
+    def test_rest_template_is_allowed_in_v4_files(self):
+        """v4 起休息日模板（键 "7"）可以随文件携带并往返"""
+        raw = ('{"format":"timetable","version":4,'
+               '"templates":{"7":[{"start":"00:00","end":"24:00","title":"躺平"}]}}')
+        p = self.parsed(raw)
+        self.assertIn(DayType.REST, p.templates)
+        self.assertEqual("躺平", p.templates[DayType.REST][0].title)
 
     def test_day_types_come_after_term_and_before_courses(self):
         """
@@ -548,35 +651,46 @@ class DayTypeApiTestCase(unittest.TestCase):
 
 
 class TestDayTypeApi(DayTypeApiTestCase):
-    def test_get_returns_all_six_with_wake_times(self):
+    def test_get_returns_all_seven_with_wake_times(self):
         """
-        六个日型都要返回，每个都要带**起床时间**。
+        七个日型都要返回（v4 起含休息日），每个都要带**起床时间**。
 
         起床时间是界面上的必需信息：用户勾选时得看得出代价 ——
         「把工作日全勾成 A 型」意味着没早八的日子也 06:55 起床。
         只给个名字的话，那个代价是看不见的。
         """
         d = self.api.get_day_types()
-        self.assertEqual(6, len(d["types"]))
+        self.assertEqual(7, len(d["types"]))
         for t in d["types"]:
             self.assertIn("key", t)
             self.assertIn("label", t)
             self.assertIn("wake", t, f"{t['key']} 没带起床时间")
             self.assertIsNotNone(t["wake"], f"{t['key']} 的起床时间算不出来")
 
+    def test_rest_row_is_locked_and_always_enabled(self):
+        """第 7 行（休息日）是自动判定的一行：锁定、永远启用、不参与回落"""
+        d = self.api.get_day_types()
+        rest = next(t for t in d["types"] if t["key"] == "7")
+        self.assertTrue(rest["locked"])
+        self.assertTrue(rest["enabled"])
+        self.assertFalse(rest["isFallback"])
+        others = [t for t in d["types"] if t["key"] != "7"]
+        self.assertFalse(any(t["locked"] for t in others), "只有休息日该锁定")
+
     def test_get_marks_the_current_fallback(self):
         d = self.api.get_day_types()
         marked = [t["key"] for t in d["types"] if t["isFallback"]]
-        self.assertEqual(["B_NORMAL"], marked, "默认策略的回落项是 B_NORMAL")
+        self.assertEqual(["2"], marked, "默认策略的回落项是 id 2（B 型日）")
 
     def test_default_state_is_the_four_core_types(self):
         d = self.api.get_day_types()
-        enabled = sorted(t["key"] for t in d["types"] if t["enabled"])
-        self.assertEqual(["A", "B_NORMAL", "SATURDAY", "SUNDAY"], enabled)
+        enabled = sorted(t["key"] for t in d["types"] if t["enabled"] and not t["locked"])
+        self.assertEqual(["1", "2", "5", "6"], enabled)
         self.assertFalse(d["hasCustomDayTypes"], "没设置过就该是 false")
+        self.assertFalse(d["hasCustomDayTypeNames"], "没改过名就该是 false")
 
     def test_save_persists_and_reports(self):
-        r = self.api.save_day_types(["A", "SATURDAY", "SUNDAY"], "A")
+        r = self.api.save_day_types(["1", "5", "6"], "1")
         self.assertTrue(r["ok"], r.get("message"))
         self.assertTrue(r["dayTypes"]["hasCustomDayTypes"], "存过之后应当标记为已自定义")
 
@@ -612,13 +726,13 @@ class TestDayTypeApi(DayTypeApiTestCase):
             used = engine.day_type(fri, 2, self.store.courses(), policy)
             return used, engine.wake_minute(templates[used])
 
-        # ---- 改之前：默认策略把周五算成 B_NORMAL，07:25 起 ----
+        # ---- 改之前：默认策略把周五算成 B 型（id 2），07:25 起 ----
         used_before, wake_before = friday_wake()
         self.assertEqual(DayType.B_NORMAL, used_before)
         self.assertEqual(7 * 60 + 25, wake_before)
 
-        # ---- 改：fallback 设成 A，于是没早八的工作日也走 A 型 ----
-        r = self.api.save_day_types(["A", "SATURDAY", "SUNDAY"], "A")
+        # ---- 改：fallback 设成 A（id 1），于是没早八的工作日也走 A 型 ----
+        r = self.api.save_day_types(["1", "5", "6"], "1")
         self.assertTrue(r["ok"], r.get("message"))
 
         # ---- 改之后：同一个周五，应当变成 A 型、06:55 起 ----
@@ -634,9 +748,19 @@ class TestDayTypeApi(DayTypeApiTestCase):
 
     def test_empty_selection_is_refused(self):
         """一种都不勾要拦下来并给出可操作的说法"""
-        r = self.api.save_day_types([], "A")
+        r = self.api.save_day_types([], "1")
         self.assertFalse(r["ok"])
         self.assertIn("至少", r["message"])
+
+    def test_rest_id_is_refused_in_the_policy(self):
+        """id 7（休息日）不许进启用列表，也不许当回落 —— 两处都要拦"""
+        r = self.api.save_day_types(["1", "7"], "1")
+        self.assertFalse(r["ok"])
+        self.assertIn("休息日", r["message"])
+
+        r = self.api.save_day_types(["1"], "7")
+        self.assertFalse(r["ok"])
+        self.assertIn("休息日", r["message"])
 
     def test_fallback_outside_enabled_is_refused_by_the_ui(self):
         """
@@ -650,13 +774,14 @@ class TestDayTypeApi(DayTypeApiTestCase):
         测试在这里把差异钉住：以后有人看到两边不一致想去「对齐」，
         会先看到这段说明。
         """
-        r = self.api.save_day_types(["A", "SATURDAY"], "B_NORMAL")
+        r = self.api.save_day_types(["1", "5"], "2")
         self.assertFalse(r["ok"])
         self.assertIn("没有被勾选", r["message"])
         # 报错要指出还有别的路子，而不是只说「不行」
         self.assertIn("导入", r["message"])
 
-        # 而文件格式那边**允许**同样内容 —— 证明差异确实存在
+        # 而文件格式那边**允许**同样内容 —— 证明差异确实存在。
+        # 这份文件故意写 v3 旧键名：旧名在文件解析里永远兼容。
         text = ('{"format":"timetable","version":3,'
                 '"dayTypes":{"enabled":["A","SATURDAY"],"fallback":"B_NORMAL"}}')
         parsed = format_spec.parse(text, 19)
@@ -664,27 +789,29 @@ class TestDayTypeApi(DayTypeApiTestCase):
         self.assertNotIn(DayType.B_NORMAL, parsed.day_types.enabled)
 
     def test_unknown_type_is_refused(self):
-        r = self.api.save_day_types(["A", "FOO"], "A")
+        r = self.api.save_day_types(["1", "FOO"], "1")
         self.assertFalse(r["ok"])
         self.assertIn("FOO", r["message"])
 
     def test_unknown_fallback_is_refused(self):
-        r = self.api.save_day_types(["A"], "MONDAY")
+        r = self.api.save_day_types(["1"], "MONDAY")
         self.assertFalse(r["ok"])
         self.assertIn("MONDAY", r["message"])
 
     def test_duplicates_are_collapsed(self):
-        r = self.api.save_day_types(["A", "A", "A"], "A")
+        r = self.api.save_day_types(["1", "1", "1"], "1")
         self.assertTrue(r["ok"], r.get("message"))
-        self.assertEqual(1, len([t for t in r["dayTypes"]["types"] if t["enabled"]]))
+        self.assertEqual(1, len([t for t in r["dayTypes"]["types"]
+                                 if t["enabled"] and not t["locked"]]))
 
     def test_reset_restores_the_default(self):
-        self.api.save_day_types(["A", "B_TRAIN_A", "B_TRAIN_B"], "B_NORMAL")
+        self.api.save_day_types(["1", "3", "4"], "2")
         r = self.api.reset_day_types()
         self.assertTrue(r["ok"])
         self.assertFalse(r["dayTypes"]["hasCustomDayTypes"])
-        enabled = sorted(t["key"] for t in r["dayTypes"]["types"] if t["enabled"])
-        self.assertEqual(["A", "B_NORMAL", "SATURDAY", "SUNDAY"], enabled)
+        enabled = sorted(t["key"] for t in r["dayTypes"]["types"]
+                         if t["enabled"] and not t["locked"])
+        self.assertEqual(["1", "2", "5", "6"], enabled)
 
     def test_every_response_is_json_serializable(self):
         """
@@ -697,8 +824,11 @@ class TestDayTypeApi(DayTypeApiTestCase):
         import json
         responses = [
             self.api.get_day_types(),
-            self.api.save_day_types(["A", "SATURDAY"], "A"),
-            self.api.save_day_types([], "A"),               # 失败路径也要能序列化
+            self.api.save_day_types(["1", "5"], "1"),
+            self.api.save_day_types([], "1"),               # 失败路径也要能序列化
+            self.api.save_day_types(["1", "7"], "1"),       # 休息日拒绝路径
+            self.api.save_day_type_names({"1": "早八日", "7": "躺平日"}),
+            self.api.save_day_type_names({"1": ""}),        # 空名拒绝路径
             self.api.reset_day_types(),
         ]
         for i, r in enumerate(responses):
@@ -706,6 +836,58 @@ class TestDayTypeApi(DayTypeApiTestCase):
                 json.dumps(r)
             except TypeError as e:
                 self.fail(f"第 {i + 1} 个返回值不能 JSON 序列化：{e}")
+
+
+class TestDayTypeNameApi(DayTypeApiTestCase):
+    """自定义日型名（v4）的桥接层行为"""
+
+    def test_save_persists_and_labels_follow(self):
+        r = self.api.save_day_type_names({"1": "早八日", "3": "力量日"})
+        self.assertTrue(r["ok"], r.get("message"))
+
+        labels = {t["key"]: t["label"] for t in r["dayTypes"]["types"]}
+        self.assertEqual("早八日", labels["1"])
+        self.assertEqual("力量日", labels["3"])
+        self.assertEqual("B 型日", labels["2"], "没改过的 id 用默认名")
+
+        # 落盘：重新构造 Store 还能读回来
+        from app.store import Store
+        again = Store().day_type_names
+        self.assertEqual("早八日", again[DayType.A])
+        self.assertEqual("力量日", again[DayType.B_TRAIN_A])
+
+    def test_names_equal_to_default_are_dropped(self):
+        """和默认名相同的值没有存储价值 —— 稀疏表里不该出现"""
+        r = self.api.save_day_type_names({"2": "B 型日", "1": "早八日"})
+        self.assertTrue(r["ok"], r.get("message"))
+        from app.store import Store
+        self.assertEqual({DayType.A: "早八日"}, Store().day_type_names)
+
+    def test_empty_mapping_restores_all_defaults(self):
+        self.api.save_day_type_names({"1": "早八日"})
+        r = self.api.save_day_type_names({})
+        self.assertTrue(r["ok"], r.get("message"))
+        self.assertTrue(r["dayTypes"]["hasCustomDayTypeNames"] is False)
+
+    def test_empty_name_is_refused(self):
+        r = self.api.save_day_type_names({"1": "   "})
+        self.assertFalse(r["ok"])
+        self.assertIn("不能为空", r["message"])
+
+    def test_too_long_name_is_refused(self):
+        r = self.api.save_day_type_names({"1": "x" * 21})
+        self.assertFalse(r["ok"])
+        self.assertIn("20", r["message"])
+
+    def test_unknown_id_is_refused(self):
+        r = self.api.save_day_type_names({"9": "第九种"})
+        self.assertFalse(r["ok"])
+        self.assertIn("9", r["message"])
+
+    def test_reset_day_types_clears_names_too(self):
+        self.api.save_day_type_names({"1": "早八日"})
+        self.api.reset_day_types()
+        self.assertFalse(self.api.get_day_types()["hasCustomDayTypeNames"])
 
 
 if __name__ == "__main__":

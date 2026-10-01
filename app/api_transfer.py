@@ -199,7 +199,13 @@ class TransferMixin:
         所以这里从 Store 读出真实值填进去，用户复制到的天然是正确的。
         """
         if kind == "template":
-            text = AiPrompt.for_templates(self.store.term_name)
+            # 名字表从 store 现读：用户改过日型名的话，提示词里那张
+            # 对照表显示的就是当前名字 —— AI 输出的键仍然是 id，
+            # 但示例和说明贴着用户的界面走，AI 的回答不容易答非所问。
+            text = AiPrompt.for_templates(
+                self.store.term_name, self.store.periods,
+                self.store.day_type_names,
+            )
         elif kind == "fix":
             text = AiPrompt.for_fix(
                 "（把程序导入时弹出的报错原文粘在这里）",

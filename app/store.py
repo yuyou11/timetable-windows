@@ -32,7 +32,7 @@ from typing import Any, Optional
 from . import builtin_data, dock, format_spec, skin
 from .day_type_policy import DayTypePolicy
 from .format_spec import FormatError
-from .models import Block, Course, DayType
+from .models import Block, Course, DayType, DEFAULT_DAY_TYPE_NAMES
 
 
 #: 主题的三种合法取值。不在这个列表里的，一律按 `system` 处理。
@@ -681,7 +681,7 @@ class Store:
         """
         「复制 JSON」按钮该不该带上作息配置。
 
-        判据是**模板或日型任意一个被改过**。
+        判据是**模板、日型、自定义名任意一个被改过**。
 
         ⚠️ 手机版这里踩过坑：以前只判断 `hasCustomTemplates`，
         于是有一类配置会丢 —— 用户导入了一份**只改 dayTypes、没改模板**的文件，
@@ -690,8 +690,59 @@ class Store:
 
         这类漏判特别隐蔽：功能没报错，只是一个字段没被带上。
         **判断「要不要带上某个东西」时，要把所有相关的来源都数一遍。**
+        （v4 加了自定义日型名 —— 这是第三个来源，判据同步扩充。）
         """
-        return self.has_custom_templates or self.has_custom_day_types
+        return (self.has_custom_templates or self.has_custom_day_types
+                or self.has_custom_day_type_names)
+
+    # ---------------- 自定义日型名（v4）----------------
+
+    @property
+    def day_type_names(self) -> dict[DayType, str]:
+        """
+        用户给日型起的名字，稀疏表：**只有改过名的 id 才有键**。
+
+        存储里是 {"1": "早八日"} 这种普通 dict（不是 JSON 字符串）——
+        data.json 是用户能手改的，让这段保持人眼可读。
+        读取走宽容版清洗（坏键坏值跳过），手改坏了不至于起不来程序。
+        """
+        return format_spec.day_type_names_from_mapping(
+            self._data.get("day_type_names"))
+
+    @day_type_names.setter
+    def day_type_names(self, value: dict) -> None:
+        """
+        值约定：{DayType 或 id 字符串: 名字}。
+
+        · 与默认名相同的键会被剔除 —— 稀疏存储只记「改过的」，
+          不然导出和「has_custom」判断都得额外排除默认值；
+        · 空串视为「恢复这个 id 的默认名」，同样剔除；
+        · 超长直接抛错（调用方 API 层已经拦过一轮，这里是最后防线）。
+        """
+        clean: dict[str, str] = {}
+        for k, name in (value or {}).items():
+            key = k.value if isinstance(k, DayType) else str(k)
+            t = format_spec.day_type_by_id(key)
+            if t is None:
+                continue
+            text = str(name).strip()
+            if not text or text == DEFAULT_DAY_TYPE_NAMES[t]:
+                continue
+            if len(text) > format_spec.DAY_TYPE_NAME_MAX:
+                raise ValueError(
+                    f"日型名太长（最多 {format_spec.DAY_TYPE_NAME_MAX} 字）：{text}")
+            clean[t.value] = text
+        self._data["day_type_names"] = clean
+        self.save()
+
+    @property
+    def has_custom_day_type_names(self) -> bool:
+        """用户是否改过任何日型的名字"""
+        return bool(self.day_type_names)
+
+    def reset_day_type_names(self) -> None:
+        self._data.pop("day_type_names", None)
+        self.save()
 
     # ---------------- 导入导出 ----------------
 
@@ -700,18 +751,21 @@ class Store:
         导出。
 
         include_schedule_config=True 时输出**完整的作息配置**：
-        展开后的六套模板 + 日型策略。这样导出的文件是一份能直接编辑的
-        完整底稿 —— 想改起床时间，在那 100 多行里找到对应那一行改掉就行，
-        不用从零写一套模板。
+        展开后的七套模板（含休息日）+ 日型策略 + 自定义日型名。
+        这样导出的文件是一份能直接编辑的完整底稿 —— 想改起床时间，
+        在那 100 多行里找到对应那一行改掉就行，不用从零写一套模板。
 
         ⚠️ **模板和日型必须一起导出。** 只带模板不带 `dayTypes` 的话，
         别人导入后拿到的日型和你的不一样（同一份模板，你只启用四种，
         他却六种全开）——**半份配置比没有配置更容易让人困惑。**
+        自定义日型名同理：不带 `dayTypeNames`，你改的「力量日」
+        在别人那里就叫回「B 型日 · 训练日 力量A」了。
 
         （参数名沿用手机版的做法从 `include_templates` 改成
         `include_schedule_config`：它现在同时管模板和日型，
         还叫原名就是**名字在说谎**。）
         """
+        names = self.day_type_names if include_schedule_config else {}
         return format_spec.serialize(
             self.term_name,
             self.term_start,
@@ -720,6 +774,7 @@ class Store:
             self.templates() if include_schedule_config else None,
             self.day_type_policy() if include_schedule_config else None,
             self.periods,
+            day_type_names=names or None,
         )
 
     def apply_import(self, parsed: format_spec.Parsed, mode: str) -> str:
@@ -758,6 +813,8 @@ class Store:
         if parsed.day_types is not None:
             self._data["day_types"] = format_spec.day_types_to_json(parsed.day_types)
 
+        # 自定义日型名（v4）同理已在上面的导入分支里处理（走 setter 过滤+保存）。
+
         # 节数信息同理：文件里没写就不动 —— 不然每导入一份课表，
         # 自己学校的节次结构都会被打回默认值。
         if parsed.periods is not None:
@@ -787,6 +844,15 @@ class Store:
 
         if parsed.day_types is not None:
             parts.append(f"启用日型 {len(parsed.day_types.enabled)} 种")
+
+        # 自定义日型名（v4）：段没写不动；写了**空对象** = 清空全部自定义名
+        #（和 courses 的「[] = 清空」同一个语义：显式的空是有意义的空）。
+        if parsed.day_type_names is not None:
+            self.day_type_names = parsed.day_type_names
+            if parsed.day_type_names:
+                parts.append(f"自定义日型名 {len(parsed.day_type_names)} 个")
+            else:
+                parts.append("已恢复全部日型默认名")
 
         if parsed.periods is not None and parsed.periods != format_spec.DEFAULT_PERIODS:
             parts.append(f"节次结构已改为 {parsed.periods}")

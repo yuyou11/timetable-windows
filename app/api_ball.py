@@ -44,7 +44,8 @@ class BallMixin:
         return {
             "ok": True,
             "week": week,
-            "dayTypeLabel": engine.day_type_display(today, week, courses, policy),
+            "dayTypeLabel": engine.day_type_display(
+                today, week, courses, policy, self.store.day_type_names),
             "now": _moment_dict(current, minute) if current else None,
             "next": {"time": slots.fmt(nxt.start), "title": nxt.title} if nxt else None,
         }
