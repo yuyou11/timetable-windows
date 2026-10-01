@@ -55,7 +55,10 @@ const KIND_LABEL = {
 //  页面切换
 // ==========================================================================
 
-function switchPage(name) {
+async function switchPage(name) {
+  // 作息编辑的「离开守卫」在 page-templates.js：有未保存改动时
+  // 弹「保存并离开 / 放弃改动 / 取消」，返回 false 就留在原页
+  if (!(await tplGuardLeave(name))) return;
   document.querySelectorAll('.nav-item').forEach((b) => {
     b.classList.toggle('active', b.dataset.page === name);
   });
@@ -228,14 +231,18 @@ function bindEvents() {
     if (r.ok) { STATE.courses = r.courses; renderCourses(); toast(r.message); }
   };
 
-  // 作息
-  $('addBlock').onclick = () => blockDialog(STATE.activeType, null, -1);
-  $('changeWake').onclick = () => wakeDialog();
+  // 作息（交互逻辑都在 page-templates.js：会话/时间轴/行内编辑）
+  $('addBlock').onclick = () => tplAddBlock();
+  $('changeWake').onclick = () => tplChangeWake();
+  $('saveTemplate').onclick = () => tplSave();
+  $('undoEdit').onclick = () => undoEdit();
+  $('discardEdit').onclick = () => discardEdit();
+  $('copyTemplate').onclick = () => tplCopyFrom();
   $('resetTemplates').onclick = async () => {
     if (!await confirmBox('恢复内置作息模板',
       '会丢弃你改过的作息，重新使用内置的七套模板（含休息日）。\n\n课表不受影响。', '恢复')) return;
     const r = await call('reset_templates');
-    if (r.ok) { STATE.templates = r.templates; renderTemplates(); toast(r.message); }
+    if (r.ok) { STATE.templates = r.templates; tplInvalidateSession(); renderTemplates(); toast(r.message); }
   };
 
   // 数据

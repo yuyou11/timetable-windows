@@ -576,6 +576,149 @@ h2 { font-size: 15px; font-weight: 600; }
 
 .block-add { margin-top: 10px; }
 
+/* ---------------- 时间轴 + 行内编辑（新一代作息编辑） ---------------- */
+
+/* 工具栏：复制 / 改起床 靠左，撤销/放弃/保存 靠右 */
+.tpl-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.tpl-toolbar .spacer { flex: 1; }
+
+/* 左右分栏：窄条时间轴 + 列表 */
+.tpl-editor { display: flex; gap: 14px; align-items: stretch; }
+.tl-wrap { flex: 0 0 128px; }
+.tpl-right { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+/* 24 小时画布：整点刻度线用渐变画，子元素全部绝对定位 */
+.tl-canvas {
+  position: relative;
+  height: 672px;              /* 24h × 28px/h */
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0 calc(100% / 24 - 1px),
+      var(--border) calc(100% / 24 - 1px) calc(100% / 24));
+  overflow: hidden;
+  touch-action: none;         /* 拖拽期间别让页面抢走手势 */
+}
+
+.tl-hour {
+  position: absolute;
+  left: 4px;
+  transform: translateY(-50%);
+  font-size: 9.5px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* 一格：高度按分钟比例，底色 = 性质色 */
+.tl-block {
+  position: absolute;
+  left: 26px;
+  right: 8px;
+  border-radius: 5px;
+  overflow: hidden;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .18);
+}
+.tl-block .tl-t {
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 0 5px;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .55);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.tl-block.sel { outline: 2px solid var(--accent); outline-offset: -1px; z-index: 3; }
+.tl-block.conflict { outline: 2px solid var(--danger); outline-offset: -1px; z-index: 2; }
+.tl-block.creating { opacity: .55; pointer-events: none; }
+
+/* 上下边缘的调时手柄 */
+.tl-h { position: absolute; left: 0; right: 0; height: 7px; cursor: ns-resize; }
+.tl-h.top { top: 0; }
+.tl-h.bottom { bottom: 0; }
+.tl-h:hover, .tl-h.dragging { background: rgba(255, 255, 255, .4); }
+
+/* 空档：斜纹占位，可以从这里拖出新格子 */
+.tl-gap {
+  position: absolute;
+  left: 26px;
+  right: 8px;
+  border-radius: 5px;
+  background: repeating-linear-gradient(
+    45deg,
+    transparent 0 6px,
+    var(--border) 6px 7px);
+  opacity: .55;
+  cursor: crosshair;
+}
+
+/* 起床线：虚线 + 小标签 */
+.tl-wake {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  border-top: 2px dashed var(--accent);
+  cursor: ns-resize;
+  z-index: 5;
+}
+.tl-wake.locked { cursor: help; opacity: .55; }
+.tl-wlabel {
+  position: absolute;
+  right: 2px;
+  top: -9px;
+  font-size: 10px;
+  line-height: 17px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* 拖拽时的时刻气泡 */
+.tl-tip {
+  position: absolute;
+  left: 30px;
+  right: 10px;
+  transform: translateY(-50%);
+  text-align: center;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 4px;
+  padding: 1px 4px;
+  pointer-events: none;
+  z-index: 9;
+}
+
+/* 列表：选中行高亮；行内编辑器贴在选中行下方 */
+.row { cursor: pointer; }
+.row.sel { border-color: var(--accent); background: var(--accent-soft); }
+
+.row-editor {
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 10px 12px;
+  cursor: default;
+}
+.row-editor-actions { display: flex; gap: 6px; margin-top: 8px; }
+
+.tpl-status { margin-top: 12px; }
+.danger-text { color: var(--danger); }
+
 /* ---------------- 按钮 ---------------- */
 
 .btn {

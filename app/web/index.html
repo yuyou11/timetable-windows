@@ -185,7 +185,7 @@
     <header class="page-head">
       <div>
         <h1>作息编辑</h1>
-        <p class="sub">每一格就是一天里的一个时段。改完立刻生效，悬浮窗和今天页都会跟着变</p>
+        <p class="sub">左边是这一天的时间轴：拖格子边缘调时间、在空档处拖出新格子、拖虚线改起床；右边点一行就地改。改完点「保存」才生效</p>
       </div>
       <button class="btn ghost" id="resetTemplates">恢复内置模板</button>
     </header>
@@ -193,14 +193,24 @@
     <div class="card">
       <div class="type-tabs" id="typeTabs"></div>
       <div class="type-info" id="typeInfo"></div>
-      <div class="row-gap" style="margin-bottom: 10px;">
-        <button class="btn primary" id="changeWake">改起床时间</button>
-        <span class="hint" style="margin: 0; align-self: center;">
-          「睡觉」和「起床、洗漱」是两格，用这个按钮一次改好
-        </span>
+      <div class="tpl-toolbar">
+        <button class="btn" id="copyTemplate">从另一套复制…</button>
+        <button class="btn" id="changeWake">改起床时间</button>
+        <span class="spacer"></span>
+        <button class="btn mini" id="undoEdit" disabled>撤销</button>
+        <button class="btn mini" id="discardEdit" disabled>放弃</button>
+        <button class="btn primary" id="saveTemplate" disabled>保存</button>
       </div>
-      <div class="block-list" id="blockList"></div>
-      <button class="btn primary block-add" id="addBlock">+ 添加一格</button>
+      <div class="tpl-editor">
+        <div class="tl-wrap">
+          <div class="tl-canvas" id="tlCanvas"></div>
+        </div>
+        <div class="tpl-right">
+          <div class="block-list" id="blockList"></div>
+          <button class="btn primary block-add" id="addBlock">+ 添加一格</button>
+        </div>
+      </div>
+      <p class="hint tpl-status" id="tplStatus"></p>
     </div>
   </section>
 
