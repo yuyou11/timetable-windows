@@ -848,7 +848,7 @@ def templates() -> dict[DayType, list[Block]]:
 # 「无课休息日」模板 —— **电脑版特有**，不是从手机版导出的。
 #
 # 引擎把「全天没课的工作日」判为 REST（假期、停课、课表没排到的日子），
-# 那天按这一套过：没有课程格子、没有晚自修，全是自由块。
+# 那天按这一套过：没有课程格子、没有晚自习，全是自由块。
 # REST 不在 DAY_TYPE_ORDER 里（不能出现在 JSON 文件中），所以这套模板
 # 只能在代码里构造，走不了 TEMPLATES_JSON。
 _REST_DAY_TEMPLATE = [
@@ -860,7 +860,7 @@ _REST_DAY_TEMPLATE = [
     Block(12 * 60 + 40, 13 * 60 + 40, '午休', note='闭眼躺一会儿，不用睡着', kind=Kind.SLEEP),
     Block(13 * 60 + 40, 17 * 60 + 30, '★ 自由块', note='整块时间，别切成碎片', kind=Kind.FREE),
     Block(17 * 60 + 30, 18 * 60 + 30, '晚餐 + 散步', kind=Kind.MEAL),
-    Block(18 * 60 + 30, 22 * 60 + 30, '★ 自由块', note='晚上没有晚自修，放松、收尾都行', kind=Kind.FREE),
+    Block(18 * 60 + 30, 22 * 60 + 30, '★ 自由块', note='晚上没有晚自习，放松、收尾都行', kind=Kind.FREE),
     Block(22 * 60 + 30, 23 * 60 + 30, '洗漱、聊天、睡前刷手机'),
     Block(23 * 60 + 30, 24 * 60, '睡觉', note='没有闹钟的一天也别熬太晚', kind=Kind.SLEEP),
 ]
