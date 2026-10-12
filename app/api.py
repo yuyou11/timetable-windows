@@ -154,6 +154,9 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
             "ballEnabled": self.store.ball_enabled,
             "remindLead": self.store.remind_lead,
             "theme": self.store.theme,
+            # 字体大小（整体缩放倍率）。前端对主窗口文档设 CSS zoom，
+            # 悬浮窗/提醒条不缩放（窗口尺寸是按内容定的）。
+            "fontScale": self.store.font_scale,
             # 自定义外观的原始值（色值/百分比）。成品色值走 _skin_dict ——
             # 前端只负责把算好的东西设上去，不再实现一遍颜色推导。
             "accent": self.store.accent,

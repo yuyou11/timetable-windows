@@ -257,33 +257,30 @@ def moments(
             else:
                 out.append(blk.copy(title=f"第 {blk.nodes[0]}-{blk.nodes[1]} 节 · 无课"))
         else:
-            # 固定日程：被课「压」掉多少就保留多少
-            segments = [blk]
-            for cb in course_blocks:
-                segments = [piece for seg in segments for piece in _clip(seg, cb)]
-            out.extend(segments)
+            # 固定日程：和课撞上就**整块让位** —— 阈值是原块的 100%。
+            #
+            # 这里曾经是「被课压掉多少就保留多少」，结果出现过
+            # 「训练 100 分钟」被两节课夹成 5 分钟缝还照显的自相矛盾条目
+            # （手机版 v1.11.1 用户报障，2026-10）。残块再短也留不得：
+            # 标题、备注都是按完整时长写的，砍剩一截之后它们全变成假话。
+            # 空档交给 _assemble 的「空档 · 机动」兜底。
+            if not any(_overlap(cb, blk) for cb in course_blocks):
+                out.append(blk)
 
-    # 没有任何占位格认领的课（周末加课、临时调课等），直接插进来并裁掉冲突
+    # 没有任何占位格认领的课（周末加课、临时调课等）直接插进来；
+    # 和它撞上的非课程块按同一条 100% 规则整块让位（无课占位格同理）
     for i, cb in enumerate(course_blocks):
         if i in claimed:
             continue
-        kept = [b for b in out if b.is_course]
-        kept += [piece for b in out if not b.is_course for piece in _clip(b, cb)]
-        out = kept + [cb]
+        out = [b for b in out if b.is_course or not _overlap(b, cb)]
+        out.append(cb)
 
     return _assemble(out)
 
 
-def _clip(b: Block, c: Block) -> list[Block]:
-    """把一块 b 挖掉与 c 重叠的部分，返回剩下的碎片（0、1 或 2 块）"""
-    if b.end <= c.start or b.start >= c.end:
-        return [b]                      # 不重叠，原样返回
-    parts: list[Block] = []
-    if b.start < c.start:
-        parts.append(b.copy(end=c.start))    # 前一段
-    if b.end > c.end:
-        parts.append(b.copy(start=c.end))    # 后一段
-    return parts
+def _overlap(a: Block, b: Block) -> bool:
+    """两块时间是否有重叠。首尾相接不算 —— 10:05 下课、10:05 开始的块互不侵犯"""
+    return a.start < b.end and b.start < a.end
 
 
 def _assemble(blocks: Sequence[Block]) -> list[Moment]:

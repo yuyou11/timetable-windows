@@ -116,18 +116,27 @@ def main() -> int:
     names = [n for n in pyz.toc if n.startswith("app.")]
     print("app modules inside the exe: " + ", ".join(sorted(names)))
 
-    if "app.api" not in pyz.toc:
+    # After the split_api refactor the anchors live across api_*.py, so scan
+    # the WHOLE group instead of app.api alone -- scanning one module loses
+    # anchors that moved into api_transfer etc., and the guard silently goes
+    # INCONCLUSIVE (fixed 2026-10).
+    api_mods = sorted(n for n in pyz.toc
+                      if n == "app.api" or n.startswith("app.api_"))
+    if "app.api" not in api_mods:
         print("app.api not found in the PYZ", file=sys.stderr)
         return 2
 
-    seen = _module_names(pyz, "app.api")
-    if seen is None:
-        print("could not extract app.api", file=sys.stderr)
-        return 2
+    seen = set()
+    for mod in api_mods:
+        got = _module_names(pyz, mod)
+        if got is None:
+            print("could not extract " + mod, file=sys.stderr)
+            return 2
+        seen |= got
 
     control = "没有待导入的数据，请重新选择文件"
     print()
-    print("positive control (a string that IS in api.py):")
+    print("positive control (a string that IS in the api_*.py group):")
     print("  found = " + str(control in seen) + "   (must be True, else the")
     print("  extraction failed and this check proves nothing)")
 
@@ -173,36 +182,35 @@ def main() -> int:
     # ---- 悬浮窗修复（任务栏按钮 / 外部关闭）是否也在里面 ----
     #
     # 同上：产物里装的是不是**这一版**代码，只有打开看才算数。
-    # 这两处修复分别住在 app.main（拦截关闭、兜底重建）和 app.winutil
-    # （等窗口出现，取代固定睡眠）。四个符号缺一不可：
+    # 这两处修复是「拦截关闭、兜底重建」和「等窗口出现，取代固定睡眠」。
+    # 四个符号缺一不可：
     #   wait_for_window    —— 不再睡 0.9 秒，任务栏按钮那个 bug 的修复
     #   _on_ball_closing   —— 拦下外部关闭
     #   _ball_alive        —— 问系统「窗口还在不在」
     #   _ensure_ball       —— 失效就重建
+    #
+    # 查找范围是**全部 app.\*** 而不是钉死模块名：这几个符号从 main.py
+    # 搬去过 ballwin.py，钉模块名的守卫会跟着搬家失明，还报出「exe 是修复
+    # 之前打的」这种误导结论（2026-10 踩过）。要证的是符号在不在，
+    # 它住哪个模块只是搬家的自由 —— 顺手把住处打出来当诊断。
     print()
     print("--- floating window fix (taskbar button / external close) ---")
-    main_names = _module_names(pyz, "app.main")
-    winutil_names = _module_names(pyz, "app.winutil")
-    if main_names is None or winutil_names is None:
-        print()
-        print("INCONCLUSIVE: could not read app.main / app.winutil,")
-        print("              so the floating-window fix is not verified.")
-        return 3
+    per_mod = {m: (_module_names(pyz, m) or set()) for m in names}
+    missing = []
+    for sym in ("wait_for_window", "_on_ball_closing", "_ball_alive",
+                "_ensure_ball"):
+        found_in = sorted(m for m, s in per_mod.items() if sym in s)
+        print("  " + sym.ljust(18) + ": "
+              + (", ".join(found_in) if found_in else "MISSING"))
+        if not found_in:
+            missing.append(sym)
 
-    markers = {
-        "main._on_ball_closing": "_on_ball_closing" in main_names,
-        "main._ball_alive": "_ball_alive" in main_names,
-        "main._ensure_ball": "_ensure_ball" in main_names,
-        "winutil.wait_for_window": "wait_for_window" in winutil_names,
-    }
-    for label, present in markers.items():
-        print("  " + label.ljust(24) + ": " + str(present))
-
-    if not all(markers.values()):
+    if missing:
         print()
-        print("FAIL: the exe was built before the floating-window fix.")
-        print("      Symbols missing: "
-              + ", ".join(k for k, v in markers.items() if not v))
+        print("FAIL: the exe is missing floating-window fix symbols: "
+              + ", ".join(missing))
+        print("      It was probably built before the fix, or from a tree")
+        print("      that lost it. Rebuild from the fixed source.")
         return 1
 
     print()

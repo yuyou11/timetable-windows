@@ -555,17 +555,79 @@ h2 { font-size: 15px; font-weight: 600; }
   font-weight: 600;
 }
 
+/* 标签右侧的小点 = 删除入口：悬停整枚标签变成深灰 ×，点击弹删除确认。
+   14px 是点击热区（视觉上还是中间那个小点），对「点在旁边」宽容。
+   实心点 = 自定义过，空心点 = 内置 —— 原先只有自定义才有标记，
+   现在每枚标签都带点（都是删除入口），深浅继续保留这个信息。
+   × 是两条圆角短杠画的几何十字，不是文字符号 —— 字形在行盒里
+   怎么都会偏一点，画出来的十字由定位保证正居中。 */
 .type-tab .dot {
-  display: inline-block;
-  width: 5px; height: 5px;
-  margin-left: 5px;
+  display: inline-flex;
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  width: 14px; height: 14px;
+  margin-left: 4px;
   border-radius: 50%;
-  background: currentColor;
-  opacity: .7;
   vertical-align: middle;
 }
 
+.type-tab .dot::before {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  opacity: .45;
+}
+
+.type-tab .dot.custom::before {
+  background: currentColor;
+  border: none;
+  opacity: .7;
+}
+
+.type-tab .dot::after { content: none; }
+
+/* 悬停整枚标签：垫一层圆片把 × 衬出来（选中标签是主色底） */
+.type-tab:hover .dot:not(.no-del) {
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+/* ×：两条短杠（±45°），深灰，绝对居中 */
+.type-tab:hover .dot:not(.no-del)::before,
+.type-tab:hover .dot:not(.no-del)::after {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 9px; height: 1.5px;
+  border: none;
+  border-radius: 1px;
+  background: var(--text-dim);
+  opacity: 1;
+}
+
+.type-tab:hover .dot:not(.no-del)::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.type-tab:hover .dot:not(.no-del)::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+/* 悬停在 × 本身上：附近一圈变浅灰 */
+.type-tab:hover .dot:not(.no-del):hover {
+  background: var(--border);
+  box-shadow: none;
+}
+
 .type-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 9px 12px;
   border-radius: var(--radius);
   background: var(--accent-soft);
@@ -573,6 +635,27 @@ h2 { font-size: 15px; font-weight: 600; }
   font-size: 12.5px;
   margin-bottom: 10px;
 }
+
+.type-info.closed { display: none; }
+
+.type-info-text { flex: 1; min-width: 0; }
+
+.type-info-x {
+  flex: 0 0 auto;
+  width: 20px; height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: .55;
+}
+
+.type-info-x:hover { opacity: 1; background: rgba(128, 128, 128, .22); }
 
 .block-add { margin-top: 10px; }
 
@@ -595,7 +678,11 @@ h2 { font-size: 15px; font-weight: 600; }
 /* 24 小时画布：整点刻度线用渐变画，子元素全部绝对定位 */
 .tl-canvas {
   position: relative;
-  height: 672px;              /* 24h × 28px/h */
+  /* 高度 1008 是时间轴本身（24h × 42px/h，672 的 1.5 倍 —— 格子更宽松），
+     不能被边框吃掉 —— border-box 下内容区会少 2px，
+     24:00 的刻度线和最后一格会被推出画布裁掉 */
+  box-sizing: content-box;
+  height: 1008px;             /* 24h × 42px/h */
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background:

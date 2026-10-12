@@ -31,7 +31,7 @@ from typing import Optional
 
 import webview
 
-from . import dock, skin, slots, winutil
+from . import dock, screen, skin, slots, winutil
 # 悬浮窗的窗口控制整体住在 app/ballwin.py（BallMixin，App 多继承它）。
 # place_window / _ease_out 在这里**再导出**一次 —— 理由和下面 screen 那组
 # 一样：tests/test_ball_placement.py 是 `from app.main import place_window`，
@@ -161,6 +161,11 @@ class App(BallMixin):
         self.reminder = ReminderScheduler(self.store, self._fire_reminder,
                                           on_error=self.api.log_error)
 
+        # 全屏（游戏模式）：前台是真全屏程序时收起悬浮窗、压住提醒。
+        # 检测与状态转换在 _watch_fullscreen / _apply_fullscreen_state。
+        self._fullscreen_active = False
+        self._fullscreen_stop = threading.Event()
+
         # 悬浮窗的停靠/动画状态在 BallMixin._init_ball_state（app/ballwin.py）
         self._init_ball_state()
 
@@ -208,6 +213,18 @@ class App(BallMixin):
         # 失败不拦着启动：症状退回「标题栏跟系统主题」，能用
         self.api.log_error(f"[标题栏] 判定改写：{detail}")
 
+        # 窗口大小：上次退出前存下来的优先，没有（第一次跑）才用默认值。
+        # 两种来源都要对着当前屏幕钳一遍 —— 换显示器 / 改分辨率之后，
+        # 存档尺寸可能放不下；下限就是 min_size，别开出比它还小的窗口。
+        # 默认尺寸按「内容列 max-width 900px + 侧栏 208px 能完整展开」给的
+        # （1000 宽时右侧只剩约 790px，900 的内容列被截着）。
+        saved = self.store.main_win_size
+        if saved:
+            width = max(820, min(saved[0], sw))
+            height = max(560, min(saved[1], sh))
+        else:
+            width = min(1200, sw - 60)
+            height = min(840, sh - 100)
         self.main = webview.create_window(
             winutil.TITLE_MAIN,
             str(resource_path("web", "index.html")),
@@ -215,12 +232,8 @@ class App(BallMixin):
             # 这里写的是**逻辑像素**，不要乘 DPI 系数 ——
             # pywebview 内部会自己换算。乘了就是双重缩放，
             # 窗口会大出一圈（实测要 1000 结果变成 1562）。详见 dock.py 开头。
-            #
-            # 默认尺寸按「内容列 max-width 900px + 侧栏 208px 能完整展开」
-            # 给的（1000 宽时右侧只剩约 790px，900 的内容列被截着）；
-            # 小屏幕上钳回工作区内 —— 宁可小一点，也别开出超出屏幕的窗口。
-            width=min(1200, sw - 60),
-            height=min(840, sh - 100),
+            width=width,
+            height=height,
             min_size=(820, 560),
             background_color="#f5f6f8",
             text_select=False,
@@ -296,6 +309,14 @@ class App(BallMixin):
         # 见 _polish_chrome。
         threading.Thread(target=self._polish_chrome, daemon=True,
                          name="chrome-polish").start()
+
+        # ---- 全屏监视（游戏模式）----
+        #
+        # 前台出现真全屏程序（游戏 / 演示）时收起悬浮窗、压住提醒条；
+        # 退出全屏后按真实设置恢复。检测是每 3 秒一次的前台窗口查询，
+        # 廉价；放独立线程，不和提醒调度互相拖累。见 _watch_fullscreen。
+        threading.Thread(target=self._watch_fullscreen, daemon=True,
+                         name="fullscreen-watch").start()
 
     def _polish_chrome(self) -> None:
         """
@@ -472,8 +493,63 @@ class App(BallMixin):
         # 这就是它们「立即生效」的那一步。重复推幂等无害。
         self._push_skin()
 
+    # ============================================================
+    #  全屏（游戏模式）
+    # ============================================================
+
+    def _watch_fullscreen(self) -> None:
+        """
+        每 3 秒看一眼前台是不是真全屏程序，状态**变化**时才动作。
+
+        轮询本身廉价（一次 GetForegroundWindow + 矩形比较），反复
+        hide/show 才是打扰。放独立线程而不是挂在提醒调度上：它和提醒
+        唯一的交集是「全屏时不弹提醒」，逻辑上互不依赖。
+        """
+        while not self._fullscreen_stop.wait(3):
+            try:
+                active = screen.fullscreen_app_active()
+            except Exception:
+                continue      # 检测失败按「不在全屏」算，下轮再试
+            if active == self._fullscreen_active:
+                continue
+            self._fullscreen_active = active
+            self._apply_fullscreen_state()
+
+    def _apply_fullscreen_state(self) -> None:
+        """
+        进入 / 退出全屏时切换悬浮窗显隐。
+
+        ⚠️ 全程**不碰 ball_enabled** —— 那是用户的持久化开关（五条
+        开关路径都写它）。游戏模式是临时状态：进全屏只 hide，退出
+        全屏后按真实设置决定要不要 show。用户在全屏期间去设置里
+        手动开关悬浮窗时以用户为准 —— 这里只在状态**变化**时动作，
+        不会把用户刚点开的球又按下去。
+        """
+        try:
+            if self._fullscreen_active:
+                if self.ball is not None and self._ball_alive():
+                    self.ball.hide()
+            elif self.store.ball_enabled and self.ball is not None \
+                    and self._ball_alive():
+                self.ball.show()
+                self._ball_suppress_expand = False
+                if self._ball_edge:
+                    self._ball_collapsed = False
+                    self._apply_ball_geometry()
+                self._push_ball_layout()
+                self._reset_ball_close_button()
+        except Exception as e:
+            self.api.log_error(f"全屏切换悬浮窗显隐失败：{type(e).__name__}: {e}")
+
     def _fire_reminder(self, moment, when_text: str) -> None:
         """提醒到点：响一声 + 弹出提示条"""
+        if self._fullscreen_active:
+            # 全屏（游戏 / 演示）期间不弹 —— 无边框全屏下提示条照样盖在
+            # 画面上；独占全屏下弹窗口会把游戏整个踢出去。这一刻本来
+            # 就在专注别的事，这一项过去了就过去了（今天页时间轴仍可见）。
+            self.api.log_error(
+                f"全屏中，跳过提醒弹窗：{when_text}：{moment.title}")
+            return
         try:
             import winsound
             winsound.MessageBeep(winsound.MB_ICONASTERISK)
@@ -603,6 +679,17 @@ class App(BallMixin):
         self._shutting_down = True
 
         self.reminder.stop()
+        self._fullscreen_stop.set()   # 全屏监视线程是 daemon，set 它图个干净收尾
+
+        # 记住主窗口最后的大小，下次启动还给它。必须在销毁**之前**读；
+        # 而且这里是唯一入口 —— 主窗口关闭（可能只是隐藏）和托盘退出
+        # 最终都会走到 _shutdown，此刻主窗口的尺寸就是它最后的样子。
+        try:
+            size = screen.window_size_logical(winutil.TITLE_MAIN)
+            if size:
+                self.store.main_win_size = size
+        except Exception:
+            pass
 
         # 下面这两处故意**不加日志**：已经在退出流程里，窗口/托盘正在销毁，
         # 此处的异常多是「对象已经没了」的预期内竞态；而且 log_error 自己

@@ -132,6 +132,17 @@ class SettingsMixin:
         self._notify_settings_changed()
         return self._settings_dict()
 
+    def set_font_scale(self, value: Any) -> dict[str, Any]:
+        """
+        字体大小（整体缩放倍率，档位见 store.FONT_SCALE_TIERS）。
+
+        和外观那组一样**立即生效**：前端拿到回包里的 fontScale 自己设
+        CSS zoom —— 这个值只有主窗口的前端消费，后端不参与渲染，
+        所以不需要 _notify_settings_changed 推给别的窗口。
+        """
+        self.store.font_scale = value
+        return self._settings_dict()
+
     def choose_background_image(self) -> dict[str, Any]:
         """
         选背景图：弹文件框 → 压缩存进数据目录 → 立即生效。

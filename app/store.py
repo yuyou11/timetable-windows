@@ -38,6 +38,10 @@ from .models import Block, Course, DayType, DEFAULT_DAY_TYPE_NAMES
 #: 主题的三种合法取值。不在这个列表里的，一律按 `system` 处理。
 THEMES = ("system", "light", "dark")
 
+#: 字体大小的档位（设置页下拉的取值，也是整体缩放的倍率）。
+#: 存盘时离档值吸附到最近的档 —— 见 font_scale.setter。
+FONT_SCALE_TIERS = (0.9, 1.0, 1.1, 1.25)
+
 
 def _theme_or_system(value) -> str:
     """取值校验：不认识的就退回 `system`。"""
@@ -54,6 +58,15 @@ def _int_or(raw: Any, default: int, lo: int, hi: int) -> int:
     """
     try:
         n = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
+
+
+def _float_or(raw: Any, default: float, lo: float, hi: float) -> float:
+    """同 _int_or 的浮点版（字体大小这类连续档位用）。"""
+    try:
+        n = float(raw)
     except (TypeError, ValueError):
         return default
     return max(lo, min(hi, n))
@@ -374,6 +387,30 @@ class Store:
         self.save()
 
     @property
+    def font_scale(self) -> float:
+        """
+        界面字体大小（整体缩放倍率），1.0 = 标准。
+
+        实现是前端对整个文档设 CSS zoom：界面里全是 px 字号，逐条改不现实；
+        等比缩放连布局一起走，课表格子、时间轴这类密集排版不会因为
+        字变大而挤出框。只作用于主窗口 —— 悬浮窗/提醒条的窗口尺寸是
+        按内容定的，缩放会溢出。
+        """
+        return _float_or(self._data.get("font_scale"), 1.0, 0.8, 1.5)
+
+    @font_scale.setter
+    def font_scale(self, value: Any) -> None:
+        try:
+            scale = float(value)
+        except (TypeError, ValueError):
+            scale = 1.0
+        # 吸附到设置页的四个档位：界面下拉只提供这几档，手改数据文件
+        # 写出离档值（比如 1.2）会让下拉框对不上，存盘时归一
+        self._data["font_scale"] = min(
+            FONT_SCALE_TIERS, key=lambda t: abs(t - scale))
+        self.save()
+
+    @property
     def bg_image(self) -> bool:
         """是否启用了背景图。图片本体在数据目录的 background.jpg，这里只是开关。"""
         return self._data.get("bg_image") is True
@@ -450,6 +487,29 @@ class Store:
     @ball_pos.setter
     def ball_pos(self, value: tuple[int, int]) -> None:
         self._data["ball_pos"] = [int(value[0]), int(value[1])]
+        self.save()
+
+    @property
+    def main_win_size(self) -> tuple[int, int] | None:
+        """
+        上次主窗口的 (宽, 高)，逻辑像素。没记录过 / 数据不像话返回 None ——
+        启动时用默认尺寸，别猜。这里的宽高上下限只挡明显的损坏值；
+        真正对着屏幕的钳制在启动那一侧做（换显示器 / 改分辨率之后，
+        文件里的旧尺寸可能根本放不下）。
+        """
+        raw = self._data.get("main_win_size")
+        if isinstance(raw, list) and len(raw) == 2:
+            try:
+                w, h = int(raw[0]), int(raw[1])
+            except (TypeError, ValueError):
+                return None
+            if 200 <= w <= 20000 and 200 <= h <= 20000:
+                return w, h
+        return None
+
+    @main_win_size.setter
+    def main_win_size(self, size: tuple[int, int]) -> None:
+        self._data["main_win_size"] = [int(size[0]), int(size[1])]
         self.save()
 
     # ---------------- 学期 ----------------

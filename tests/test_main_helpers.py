@@ -180,5 +180,54 @@ class TestHelpersAreReExportedFromMain(unittest.TestCase):
         )
 
 
+class TestFullscreenDetection(unittest.TestCase):
+    """
+    全屏判定（游戏模式）的纯函数部分。
+
+    「**最大化窗口不许算全屏**」是用户明确提的约束 —— 普通最大化和
+    无边框全屏的矩形可以完全一样（开了自动隐藏任务栏时），唯一可靠
+    的分界线是 WS_MAXIMIZE 样式位，这条必须钉进测试。桌面、任务栏和
+    自己的窗口是另外几类误报源，一并钉住。
+    """
+
+    MON = dock.Area(0, 0, 1920, 1080)
+    WS_MAXIMIZE = 0x01000000
+
+    def test_borderless_fullscreen_game_counts(self):
+        """无边框全屏游戏：盖满整台显示器、无最大化样式位 —— 就是它"""
+        w = dock.Area(0, 0, 1920, 1080)
+        self.assertTrue(screen._looks_fullscreen(w, self.MON, 0, "GameClass", "游戏"))
+
+    def test_maximized_window_does_not_count(self):
+        """普通最大化：矩形跟全屏一模一样（自动隐藏任务栏时），但带着
+        WS_MAXIMIZE 样式位 —— 必须拦下来"""
+        w = dock.Area(0, 0, 1920, 1080)
+        self.assertFalse(screen._looks_fullscreen(
+            w, self.MON, self.WS_MAXIMIZE, "Notepad", "记事本"))
+
+    def test_workarea_sized_window_does_not_count(self):
+        """普通窗口只盖住工作区，任务栏露着 —— 矩形这一关就过不去"""
+        w = dock.Area(0, 0, 1920, 1032)
+        self.assertFalse(screen._looks_fullscreen(w, self.MON, 0, "App", "应用"))
+
+    def test_desktop_and_taskbar_do_not_count(self):
+        """点一下桌面就「进全屏」是最荒唐的误报 —— 桌面和任务栏排除在外"""
+        w = dock.Area(0, 0, 1920, 1080)
+        for cls in ("Progman", "WorkerW", "Shell_TrayWnd"):
+            self.assertFalse(screen._looks_fullscreen(w, self.MON, 0, cls, ""))
+
+    def test_own_windows_do_not_count(self):
+        """主窗口最大化、球贴边，都不该让程序自己进入「游戏模式」"""
+        w = dock.Area(0, 0, 1920, 1080)
+        own = ("时间规划表", "时间规划表 · 悬浮窗", "时间规划表 · 提醒")
+        self.assertFalse(screen._looks_fullscreen(
+            w, self.MON, 0, "", "时间规划表", own_titles=own))
+
+    def test_partial_cover_does_not_count(self):
+        """铺不满一整台显示器的窗口不算（分屏、窗口化游戏）"""
+        w = dock.Area(0, 0, 1920, 900)
+        self.assertFalse(screen._looks_fullscreen(w, self.MON, 0, "Game", "游戏"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

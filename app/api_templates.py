@@ -43,6 +43,8 @@ class TemplatesMixin:
                     "key": t.value,
                     "label": day_type_name(t, names),
                     "isCustom": t in custom,
+                    # 休息日是引擎自动判定层，删不掉 —— 前端据此不出删除入口
+                    "locked": t is DayType.REST,
                     "wake": (
                         slots.fmt(w) if (w := engine.wake_minute(merged[t])) is not None else None
                     ),

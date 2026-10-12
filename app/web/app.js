@@ -121,6 +121,19 @@ async function applyBackgroundFromBackend() {
   if (dimInput) dimInput.disabled = !r.dataUrl;
 }
 
+/**
+ * 字体大小（整体缩放）：设置页改档、启动恢复共用这一个入口。
+ *
+ * 实现是对根元素设 CSS zoom：界面里全是 px 字号，逐条改不现实；
+ * 等比缩放连布局一起走，课表格子、时间轴这类密集排版不会因为
+ * 字变大而挤出框。只作用在主窗口 —— 悬浮窗/提醒条是独立文档，
+ * 窗口尺寸按内容定的，缩放会溢出。
+ */
+function applyFontScale(scale) {
+  const v = Number(scale);
+  document.documentElement.style.zoom = (v >= 0.5 && v <= 2) ? v : 1;
+}
+
 // ==========================================================================
 //  事件绑定
 // ==========================================================================
@@ -154,6 +167,14 @@ function bindEvents() {
     if (!r || r.ok === false) { toast((r && r.message) || '没换成'); return; }
     STATE.settings = r;
     renderAccent('');
+  };
+
+  // 字体大小：档位存后端（离档值由 store 吸附归一），缩放由前端自己设
+  $('fontPick').onchange = async (e) => {
+    const r = await call('set_font_scale', Number(e.target.value));
+    if (!r || r.ok === false) { toast((r && r.message) || '没存上'); return; }
+    STATE.settings = r;
+    applyFontScale(r.fontScale);
   };
 
   $('cardOpacity').onchange = async (e) => {
@@ -363,6 +384,7 @@ async function boot() {
   // bootstrap 里带了同源的成品色值，这里再兜一次。
   if (window.__applySkin && data.skin) window.__applySkin(data.skin);
   applyBackgroundFromBackend();   // 背景图是前端拉的，就只有这一处
+  applyFontScale(data.settings.fontScale);   // 字体大小同理：bootstrap 里带的就是存档值
 
   $('brandSub').textContent = `第 ${data.term.todayWeek} 周`;
   // 「关于」页的版本号也在这里填 —— 唯一来源是后端（app/__init__.py），

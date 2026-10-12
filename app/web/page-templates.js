@@ -6,6 +6,7 @@
   · 左侧 24 小时竖向时间轴：格子按分钟比例着色，空档看得见，
     上下边缘拖拽调时间、空档处拖出新格子、起床线可拖；
   · 右侧列表：点行展开行内编辑器，不再逐格弹窗；
+  · 日型标签右侧的小点是删除入口：悬停变红 ×，点击弹确认卡片（休息日除外）；
   · 编辑会话：所有改动先落在本地工作副本，点「保存」整套提交
     （save_template_blocks），可撤销（快照栈）、可放弃；
     dirty 时切日型/离开页面会拦截确认。
@@ -18,7 +19,7 @@
 
 'use strict';
 
-const TL_PX_PER_MIN = 672 / 1440;   // 时间轴总高 672px
+const TL_PX_PER_MIN = 1008 / 1440;   // 时间轴总高 1008px（24h × 42px/h）
 const TL_MIN_DURATION = 5;          // 一格最短 5 分钟（也是拖拽/新建的吸附粒度）
 
 // ==========================================================================
@@ -129,6 +130,30 @@ async function loadTemplates() {
   return STATE.templates;
 }
 
+// ==========================================================================
+//  提示栏的关闭状态（关一次就一直不显示）
+// ==========================================================================
+
+let infoBarClosed = null;   // null = 还没从 localStorage 读过
+
+/**
+ * localStorage 在 file:// 源下可用；万一被隐私模式/策略禁掉，
+ * try/catch 接住 —— 退回「本次会话关了就关了」，不算坏。
+ */
+function infoBarDismissed() {
+  if (infoBarClosed === null) {
+    try { infoBarClosed = localStorage.getItem('tplInfoBarClosed') === '1'; }
+    catch (_) { infoBarClosed = false; }
+  }
+  return infoBarClosed;
+}
+
+function closeInfoBar() {
+  infoBarClosed = true;
+  try { localStorage.setItem('tplInfoBarClosed', '1'); } catch (_) { /* 同上 */ }
+  $('typeInfo').classList.add('closed');
+}
+
 async function renderTemplates() {
   // 永远从后端取新 —— STATE.templates 会被别处（创建/删除日型后）改旧，
   // 用缓存渲染会把「刚建好的日型没有标签」这类陈旧状态画出来。
@@ -140,7 +165,7 @@ async function renderTemplates() {
   tabs.innerHTML = '';
   t.types.forEach((type) => {
     const btn = el('button', 'type-tab' + (type.key === STATE.activeType ? ' active' : ''), type.label);
-    if (type.isCustom) btn.appendChild(el('span', 'dot'));
+    btn.appendChild(typeDot(type));
     btn.onclick = () => switchType(type.key);
     tabs.appendChild(btn);
   });
@@ -161,9 +186,11 @@ async function renderTemplates() {
   STATE.activeType = active.key;
   ensureSession(active.key);
 
-  $('typeInfo').textContent = active.wake
+  $('typeInfoText').textContent = active.wake
     ? `这一天 ${active.wake} 起床${active.isCustom ? '（已自定义）' : ''} —— 左边时间轴上虚线就是起床线，可以拖`
     : '这一天没有上午的睡眠段，界面上不会显示起床时间';
+  $('typeInfo').classList.toggle('closed', infoBarDismissed());
+  $('typeInfoX').onclick = closeInfoBar;
 
   renderEditor();
 }
@@ -171,6 +198,58 @@ async function renderTemplates() {
 function currentTypeLabel() {
   const d = typeData(edit ? edit.key : STATE.activeType);
   return d ? d.label : '';
+}
+
+// ==========================================================================
+//  日型标签上的删除点（红 ×）
+// ==========================================================================
+
+/**
+ * 标签右侧的小点 = 删除入口：平时是小圆点（实心 = 自定义过，空心 = 内置），
+ * 悬停整枚标签变成红 ×。休息日是引擎自动判定层（工作日全天没课），
+ * 删不掉 —— 它的点是纯装饰（.no-del 不变形、不响应点击）。
+ */
+function typeDot(type) {
+  const dot = el('span', 'dot'
+    + (type.isCustom ? ' custom' : '')
+    + (type.locked ? ' no-del' : ''));
+  if (type.locked) {
+    dot.title = '休息日由引擎自动判定，不能删除';
+    return dot;
+  }
+  dot.title = '删除这个日型';
+  dot.onclick = (e) => {
+    e.stopPropagation();   // 点的是删除，不是「切到这个日型」
+    tplDeleteType(type);
+  };
+  return dot;
+}
+
+/** 红 × 的删除流程：警告卡片 → 确认 → 后端守卫放行才真删 */
+async function tplDeleteType(type) {
+  const dirty = edit && edit.key === type.key && edit.dirty;
+  const okDel = await confirmBox('删除日型',
+    `删除「${type.label}」后它管的天要改派给别人才能用，删除无法撤销。`
+    + `整套作息 ${type.blocks.length} 格一起删。`
+    + (dirty ? ' 有未保存的改动会一并丢弃。' : ''),
+    '删除', true);
+  if (!okDel) return;
+
+  const r = await call('delete_day_type', type.key);
+  if (!r.ok) {
+    // 删不了的原因和「下一步怎么办」都在后端的 message 里（还管着星期 /
+    // 是早八日型 / 休息日），照实转达，不在前端另写一套规矩
+    await modal({ title: '删不了', body: r.message,
+      buttons: [{ label: '知道了', value: 1, primary: true }] });
+    return;
+  }
+  toast(r.message);
+  STATE.templates = r.templates;
+  STATE.settings = r.settings;
+  // 删的不是正在编辑的那套时，工作副本（含未保存改动）原样留着
+  if (edit && edit.key === type.key) tplInvalidateSession();
+  await renderTemplates();
+  await refreshAll();
 }
 
 /** 编辑区全量重绘：时间轴 + 列表 + 状态条 + 工具栏（保持选中） */
@@ -222,6 +301,11 @@ function renderTimeline() {
   for (let h = 0; h <= 24; h += 2) {
     const lab = el('span', 'tl-hour', String(h).padStart(2, '0'));
     lab.style.top = (h * 60 * TL_PX_PER_MIN) + 'px';
+    // 刻度默认垂直居中在自己的时刻上，但首尾两个正好贴着画布边缘，
+    // 会被 overflow:hidden 裁掉半个字 —— 各自往里收（00 对齐上边、
+    // 24 对齐下边），中间的照旧居中
+    if (h === 0) lab.style.transform = 'translateY(0)';
+    else if (h === 24) lab.style.transform = 'translateY(-100%)';
     canvas.appendChild(lab);
   }
 
@@ -287,7 +371,11 @@ function snap5(min) {
   return Math.round(min / TL_MIN_DURATION) * TL_MIN_DURATION;
 }
 
-/** 分钟 → 时间轴 y 坐标换算（拖拽共用的鼠标取值） */
+/** 分钟 → 时间轴 y 坐标换算（拖拽共用的鼠标取值）。
+ *  取值和换算都用 getBoundingClientRect 的**可视坐标** —— 设置页的
+ *  字体大小是根元素上的 CSS zoom，clientTop/clientHeight 在缩放下
+ *  与可视坐标不同源，混用会在非 100% 档位错位。边框带来的 1px 偏差
+ *  由 5 分钟吸附吃掉。 */
 function pointerMinute(canvas, ev) {
   const rect = canvas.getBoundingClientRect();
   return Math.max(0, Math.min(1440, (ev.clientY - rect.top) / rect.height * 1440));

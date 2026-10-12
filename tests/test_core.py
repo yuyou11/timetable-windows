@@ -373,7 +373,54 @@ class TestTimeline(unittest.TestCase):
         ms = engine.moments(d(2026, 9, 21), 3, self.courses, merged)
 
         self.assertEqual("大学英语", engine.current_at(ms, 9 * 60).title)
-        self.assertEqual("我安排的一整天", engine.current_at(ms, 12 * 60 + 30).title)
+        # 「我安排的一整天」被当天几门课压过，按 100% 阈值整块让位（2026-10 起，
+        # 不再留残块），空着的时段交给「空档 · 机动」兜底
+        self.assertEqual("空档 · 机动", engine.current_at(ms, 12 * 60 + 30).title)
+        for i in range(1, len(ms)):
+            self.assertEqual(ms[i - 1].end, ms[i].start)
+
+    def test_overlapped_fixed_block_drops_entirely(self):
+        """
+        被课压到的固定日程整块让位 —— 阈值是原块的 100%（2026-10 起）。
+
+        早八课占 08:30-10:05，压住了「训练」的前半。整块消失，
+        而不是留一条标题写着「100 分钟」、时长却只剩几十分钟的残块
+        （手机版 v1.11.1 用户报障：训练被两节课夹成 5 分钟缝还照显）。
+        """
+        custom = {
+            DayType.A: [
+                Block(0, 8 * 60 + 30, "睡觉", kind=Kind.SLEEP),
+                Block(8 * 60 + 30, 11 * 60, "训练 100 分钟", kind=Kind.TRAIN),
+                Block(11 * 60, 1440, "自由", kind=Kind.FREE),
+            ]
+        }
+        early = [Course("大学英语", 1, 1, 2, frozenset({3}), "X-101")]
+        # 先钉住前提：早八 → A 型，用的确实是上面这套自定义模板
+        self.assertEqual(DayType.A, engine.day_type(d(2026, 9, 21), 3, early, DayTypeConfig.DEFAULT))
+
+        ms = engine.moments(d(2026, 9, 21), 3, early, custom)
+        self.assertEqual("大学英语", next(m for m in ms if m.is_course).title)
+        self.assertFalse(any(m.title.startswith("训练") for m in ms))
+        for i in range(1, len(ms)):
+            self.assertEqual(ms[i - 1].end, ms[i].start)
+
+    def test_fixed_block_touching_course_is_kept(self):
+        """
+        100% 阈值只看「有没有被压掉一部分」：首尾相接不算撞。
+        「睡觉」到 08:30 整、早八课 08:30 开始；「自由」10:05 开始、
+        恰好是下课那一分钟 —— 两块都原样保留。
+        """
+        custom = {
+            DayType.A: [
+                Block(0, 8 * 60 + 30, "睡觉", kind=Kind.SLEEP),
+                Block(10 * 60 + 5, 1440, "自由", kind=Kind.FREE),
+            ]
+        }
+        early = [Course("大学英语", 1, 1, 2, frozenset({3}), "X-101")]
+        ms = engine.moments(d(2026, 9, 21), 3, early, custom)
+
+        self.assertTrue(any(m.title == "睡觉" for m in ms))
+        self.assertTrue(any(m.title == "自由" for m in ms))
         for i in range(1, len(ms)):
             self.assertEqual(ms[i - 1].end, ms[i].start)
 

@@ -192,7 +192,10 @@
 
     <div class="card">
       <div class="type-tabs" id="typeTabs"></div>
-      <div class="type-info" id="typeInfo"></div>
+      <div class="type-info" id="typeInfo">
+        <span class="type-info-text" id="typeInfoText"></span>
+        <button class="type-info-x" id="typeInfoX" title="关闭提示">×</button>
+      </div>
       <div class="tpl-toolbar">
         <button class="btn" id="copyTemplate">从另一套复制…</button>
         <button class="btn" id="changeWake">改起床时间</button>
@@ -284,6 +287,17 @@
         </select>
       </div>
       <p class="hint" id="themeHint">切换后重启程序生效。</p>
+
+      <div class="field-row" style="margin-top: 18px;">
+        <label>字体大小</label>
+        <select id="fontPick" class="input">
+          <option value="0.9">小（90%）</option>
+          <option value="1">标准（100%）</option>
+          <option value="1.1">大（110%）</option>
+          <option value="1.25">特大（125%）</option>
+        </select>
+      </div>
+      <p class="hint">整个界面的文字和控件一起缩放，改完立即生效。</p>
 
       <div class="field-row" style="margin-top: 18px;">
         <label>主色调</label>

@@ -40,7 +40,7 @@ import ctypes
 import sys
 from pathlib import Path
 
-from . import dock
+from . import dock, winutil
 
 
 def is_dark_mode() -> bool:
@@ -302,3 +302,126 @@ def screen_size() -> tuple[int, int]:
     """工作区的宽高（逻辑像素）"""
     area = work_area()
     return area.width, area.height
+
+
+def window_size_logical(title: str) -> tuple[int, int] | None:
+    """
+    按标题找窗口，返回它的**逻辑像素** (宽, 高)；找不到或拿不到返回 None。
+
+    给「记住上次窗口大小」用：退出前读一次存起来，下次启动还给它。
+    `winutil.window_rect` 给的是物理像素（GetWindowRect，DPI 感知下），
+    换算规则和 work_area() 相同 —— 除一次 ui_scale()。
+    GetWindowRect 比可见区域宽出一条不可见的缩放边（约 7px），
+    对「大小差一点点」无感，不做二次修正。
+    """
+    try:
+        rect = winutil.window_rect(title)
+        if rect is None:
+            return None
+        scale = ui_scale() or 1.0
+        w = round((rect[2] - rect[0]) / scale)
+        h = round((rect[3] - rect[1]) / scale)
+        if w > 200 and h > 200:
+            return w, h
+    except Exception:
+        pass
+    return None
+
+
+# ============================================================
+#  全屏检测（游戏模式）
+# ============================================================
+
+#: 全屏判定里不算「程序」的系统窗口类：桌面本体和任务栏。
+#: 桌面（Progman / WorkerW）盖满整台显示器是常态，不排除的话
+#: 「回到桌面点一下」就会误判成全屏。
+_FULLSCREEN_SHELL_CLASSES = ("Progman", "WorkerW", "Shell_TrayWnd")
+
+#: 窗口被**正常最大化**时 Windows 会置的样式位。全屏游戏是自己把自己
+#: 缩放到显示器大小的，不带这个位 —— 这是「全屏」和「最大化」之间
+#: 唯一可靠的分界线（用户明确要求：最大化窗口不许算全屏）。
+_WS_MAXIMIZE = 0x01000000
+
+
+def _looks_fullscreen(window: dock.Area, monitor: dock.Area,
+                      style: int, window_class: str = "",
+                      title: str = "", own_titles: tuple = ()) -> bool:
+    """
+    判定一个窗口是不是**真全屏**：盖满一台显示器，且不是最大化。
+
+    拆成纯函数是为了能单测 —— 「最大化窗口不许算全屏」是用户明确
+    提过的约束，值得一条测试钉住（见 tests/test_main_helpers.py）。
+    """
+    if window_class in _FULLSCREEN_SHELL_CLASSES:
+        return False
+    if title and title in own_titles:
+        return False
+    if style & _WS_MAXIMIZE:
+        return False
+    return (window.left <= monitor.left and window.top <= monitor.top
+            and window.right >= monitor.right and window.bottom >= monitor.bottom)
+
+
+def fullscreen_app_active() -> bool:
+    """
+    前台是不是一个**真全屏**程序（无边框全屏游戏 / 独占全屏 / 演示模式）。
+
+    给「游戏模式」用：全屏期间收起悬浮窗、压住提醒条。两路信号任一命中：
+
+      1. 前台窗口盖满某台显示器，且不是最大化。普通最大化盖满的只是
+         工作区（任务栏还露着），够不着这条；就算开了自动隐藏任务栏
+         真能盖满，样式位 _WS_MAXIMIZE 也把它兜住。
+      2. SHQueryUserNotificationState 报告 D3D 独占全屏 / 演示模式 ——
+         Windows 自己压通知用的信号。独占全屏下球本来就被盖住看不见，
+         但提醒条一弹会把游戏整个踢出全屏，这才是真正要拦的。
+
+    拿不到信号（异常 / 老系统）一律按「不在全屏」算 —— 宁可少收起，
+    不能平白把球藏了。
+    """
+    try:
+        import ctypes.wintypes as wt
+
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return False
+
+        cls = ctypes.create_unicode_buffer(64)
+        user32.GetClassNameW(hwnd, cls, 64)
+        title = ctypes.create_unicode_buffer(128)
+        user32.GetWindowTextW(hwnd, title, 128)
+
+        rect = wt.RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return False
+        style = user32.GetWindowLongW(hwnd, -16)          # GWL_STYLE
+
+        class _MonitorInfo(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_ulong),
+                        ("rcMonitor", wt.RECT),
+                        ("rcWork", wt.RECT),
+                        ("dwFlags", ctypes.c_ulong)]
+
+        mi = _MonitorInfo()
+        mi.cbSize = ctypes.sizeof(_MonitorInfo)
+        hmon = user32.MonitorFromWindow(hwnd, 2)          # MONITOR_DEFAULTTONEAREST
+        if hmon and user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+            if _looks_fullscreen(
+                dock.Area(rect.left, rect.top, rect.right, rect.bottom),
+                dock.Area(mi.rcMonitor.left, mi.rcMonitor.top,
+                          mi.rcMonitor.right, mi.rcMonitor.bottom),
+                style, cls.value, title.value,
+                own_titles=(winutil.TITLE_MAIN, winutil.TITLE_BALL,
+                            winutil.TITLE_TOAST),
+            ):
+                return True
+
+        # 信号 2：系统通知状态。QUNS_RUNNING_D3D_FULL_SCREEN = 3，
+        # QUNS_PRESENTATION_MODE = 4（返回值 S_OK = 0 才算拿到了状态）。
+        state = ctypes.c_int()
+        if ctypes.windll.shell32.SHQueryUserNotificationState(
+                ctypes.byref(state)) == 0:
+            return state.value in (3, 4)
+        return False
+    except Exception:
+        return False

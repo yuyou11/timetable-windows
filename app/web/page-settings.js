@@ -21,6 +21,11 @@ async function renderSettings() {
   // 和 <select> 的 option.value 对上 —— 别在这里做映射，多一层就多一处会漂移。
   $('themePick').value = t.settings.theme;
 
+  // 字体大小：存档值在 setter 里吸附过档位，一定对得上某个 option
+  const fontPick = $('fontPick');
+  fontPick.value = String(t.settings.fontScale);
+  if (fontPick.selectedIndex === -1) fontPick.value = '1';   // 兜底：手改出离档值
+
   renderAccent(t.settings.accent || '');
   $('cardOpacity').value = t.settings.cardOpacity;
   $('cardOpacityValue').textContent = t.settings.cardOpacity + '%';

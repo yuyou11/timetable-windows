@@ -631,6 +631,55 @@ class TestClampingAndNormalisation(StoreTestCase):
             _ = self.store.ball_center
 
 
+class TestFontScale(StoreTestCase):
+    """
+    字体大小（整体缩放倍率）：**存盘时吸附到档位**，和 total_weeks 的
+    「写进夹取」是同一个思路 —— 界面下拉只提供四档，档位之外的手改值
+    会让下拉框对不上，所以归一放在 setter 这一个点。
+    """
+
+    def test_default_is_standard(self):
+        self.assertEqual(1.0, self.store.font_scale)
+
+    def test_setter_snaps_to_nearest_tier(self):
+        for raw, expected in ((0.92, 0.9), (1.0, 1.0), (1.2, 1.25),
+                              (0.7, 0.9), (1.4, 1.25), (2, 1.25), (0.5, 0.9)):
+            self.store.font_scale = raw
+            self.assertEqual(expected, self.store.font_scale,
+                             f"{raw} 应该吸附到最近的档 {expected}")
+
+    def test_setter_rejects_garbage_by_resetting_to_standard(self):
+        self.store.font_scale = 1.25
+        self.store.font_scale = "大字号"
+        self.assertEqual(1.0, self.store.font_scale)
+
+    def test_persists_across_reopen(self):
+        self.store.font_scale = 1.1
+        self.assertEqual(1.1, self.reopen().font_scale)
+
+
+class TestMainWindowSize(StoreTestCase):
+    """主窗口尺寸的记档：没记录过给 None（启动用默认尺寸），坏值不当真"""
+
+    def test_absent_by_default(self):
+        self.assertIsNone(self.store.main_win_size)
+
+    def test_roundtrip(self):
+        self.store.main_win_size = (1150, 800)
+        self.assertEqual((1150, 800), self.reopen().main_win_size)
+
+    def test_garbage_returns_none(self):
+        for bad in ("全屏", [1], [1, 2, 3], ["宽", "高"], 12345):
+            self.store._data["main_win_size"] = bad
+            self.assertIsNone(self.store.main_win_size, f"{bad!r} 不该被当成尺寸")
+
+    def test_absurd_values_return_none(self):
+        self.store._data["main_win_size"] = [99999, 99999]
+        self.assertIsNone(self.store.main_win_size)
+        self.store._data["main_win_size"] = [-100, -100]
+        self.assertIsNone(self.store.main_win_size)
+
+
 # ============================================================
 #  五、首次启动判定
 # ============================================================
