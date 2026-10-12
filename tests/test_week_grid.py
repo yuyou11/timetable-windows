@@ -339,5 +339,114 @@ class TestCoursesOutsidePairsStillShow(WeekGridTestCase):
         self.assertEqual("旧晚课", cell["name"])
 
 
+class TestTodayFlag(WeekGridTestCase):
+    """课表页「当天高亮」的数据依据：days 里的 isToday 只标真实日期那一天"""
+
+    def test_today_flag_only_in_current_week(self):
+        w = self.api.get_week(0)
+        flagged = [d for d in w["days"] if d["isToday"]]
+        if w["isCurrent"]:
+            self.assertEqual(1, len(flagged), "本周视图里今天就该被标出来")
+            self.assertEqual(date.today().isoweekday(), flagged[0]["dow"],
+                             "标的必须是真实今天对应的星期几")
+        else:
+            self.assertEqual([], flagged, "不是本周就不该有今天标记")
+
+    def test_other_weeks_have_no_today_flag(self):
+        """翻周之后七天全是 False —— 高亮跟着「本周」走，不是跟着星期几走"""
+        w = self.api.get_week(0)
+        other = self.api.get_week(1 if w["week"] < self.store.total_weeks else -1)
+        if other["week"] == w["week"]:
+            self.skipTest("学期只有一周，翻不出别的周")
+        self.assertFalse(any(d["isToday"] for d in other["days"]))
+
+
+class TestWeekOverview(WeekGridTestCase):
+    """
+    选周浮层的底料：`api.get_week_overview()` 的每周「有没有课」
+    必须和 `get_week` 网格里有没有课是同一个口径 ——
+    点阵说有课、翻过去却是空表（或反过来）是最难缠的那种坏。
+    """
+
+    def test_weeks_cover_whole_term(self):
+        r = self.api.get_week_overview()
+        self.assertEqual(
+            list(range(1, self.store.total_weeks + 1)),
+            [w["week"] for w in r["weeks"]],
+            "overview 必须给出第 1 到第 totalWeeks 周，一周不缺",
+        )
+        self.assertEqual(r["totalWeeks"], self.store.total_weeks)
+
+    def test_has_course_matches_grid(self):
+        """第 5 周只有周六一门课、第 2 周只有周日一门课：这两周必须判「有课」，
+        且和 get_week 网格里真实出现课格子的周完全一致"""
+        self.set_courses([
+            Course("周六的课", 6, 1, 2, frozenset({5}), "S-101"),
+            Course("周日的课", 7, 3, 4, frozenset({2}), "U-202"),
+        ])
+        r = self.api.get_week_overview()
+        by_week = {w["week"]: w["hasCourse"] for w in r["weeks"]}
+        self.assertTrue(by_week[5], "第 5 周有周六的课，点阵必须亮")
+        self.assertTrue(by_week[2], "第 2 周有周日的课，点阵必须亮")
+
+        # 全学期逐周对账：overview 说有课 ⇔ 网格里真的有名字
+        for w in r["weeks"]:
+            grid = self.api.get_week(w["week"] - self.store.week_of(date.today()))
+            has_in_grid = any(c["name"] for row in grid["rows"] for c in row["cells"])
+            self.assertEqual(
+                has_in_grid, w["hasCourse"],
+                f"第 {w['week']} 周：overview 和网格的「有没有课」口径不一致",
+            )
+
+    def test_disabled_course_does_not_light_up(self):
+        self.set_courses([Course("停上的课", 1, 1, 2, frozenset({1}), "", enabled=False)])
+        r = self.api.get_week_overview()
+        first = next(w for w in r["weeks"] if w["week"] == 1)
+        self.assertFalse(first["hasCourse"], "停用的课不该点亮那一周")
+        self.assertTrue(
+            all(set(row) == {"0"} for row in first["pattern"]),
+            "停用的课不该点亮任何点阵格",
+        )
+
+    def test_pattern_matches_course_slots(self):
+        """点阵形状：pattern[日][行] 必须和这周真实课程的大节位置一致
+        （默认 442 = 10 小节 → 5 行，第 n 行覆盖第 2n+1 ~ 2n+2 节）"""
+        self.set_courses([
+            Course("周六的课", 6, 1, 2, frozenset({5}), "S-101"),   # 周六第 1-2 节
+            Course("周日的课", 7, 3, 4, frozenset({2}), "U-202"),   # 周日第 3-4 节
+            Course("晚课", 3, 9, 10, frozenset({5}), ""),           # 周三第 9-10 节
+        ])
+        r = self.api.get_week_overview()
+        rows = (self.store.node_count + 1) // 2
+        self.assertEqual(5, rows)
+
+        w5 = next(w for w in r["weeks"] if w["week"] == 5)
+        self.assertEqual(7, len(w5["pattern"]), "pattern 必须是 7 天各一列")
+        self.assertTrue(all(len(row) == rows for row in w5["pattern"]))
+        self.assertEqual("1", w5["pattern"][5][0], "周六列第 1 行（1-2 节）要亮")
+        self.assertEqual("0", w5["pattern"][5][1], "周六列第 2 行（3-4 节）不该亮")
+        self.assertEqual("1", w5["pattern"][2][4], "周三列最后一行（9-10 节）要亮")
+        self.assertEqual("0", w5["pattern"][0][0], "周一整天没课，第一格不亮")
+
+        w2 = next(w for w in r["weeks"] if w["week"] == 2)
+        self.assertEqual("1", w2["pattern"][6][1], "第 2 周周日列第 2 行（3-4 节）要亮")
+        self.assertEqual("0", w2["pattern"][6][0], "周日 1-2 节没课，不亮")
+
+    def test_pattern_lights_couple_courses(self):
+        """跨在 3-5 节上的课要同时点亮第 2 行（3-4 节）和第 3 行（5-6 节）"""
+        self.set_courses([Course("长课", 2, 3, 5, frozenset({1}), "")])
+        r = self.api.get_week_overview()
+        w1 = next(w for w in r["weeks"] if w["week"] == 1)
+        self.assertEqual("1", w1["pattern"][1][1], "3-4 节那行要亮")
+        self.assertEqual("1", w1["pattern"][1][2], "5-6 节那行也要亮（课跨到第 5 节）")
+
+    def test_current_week_is_clamped(self):
+        """「本周」必须钳在 1..总周数 —— 开学前 week_of 是 0，
+        不钳的话浮层里「回到本周」会指向一个不存在的第 0 周"""
+        r = self.api.get_week_overview()
+        self.assertTrue(1 <= r["currentWeek"] <= self.store.total_weeks)
+        self.assertEqual(r["todayWeek"], self.store.week_of(date.today()))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

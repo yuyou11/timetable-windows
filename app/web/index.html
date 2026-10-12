@@ -142,16 +142,29 @@
   </section>
 
   <!-- ---------- 课表 ---------- -->
+  <!-- 翻周按钮（上一周/下一周/回到本周）删掉了：换成「点页头卡片 → 选周浮层」，
+       交互全部在 page-week.js。 -->
   <section class="page" id="page-week">
-    <header class="page-head">
-      <div>
+    <!-- 页头卡片本身就是按钮：点开「选周」浮层。里面有两层内容 ——
+         正常态的标题（weekCardNormal）和展开后的浮层（weekPicker），
+         展开动画时两层交叉淡化，见 style.css 的「选周浮层」一段。 -->
+    <header class="page-head week-head week-card" id="weekCard" role="button" tabindex="0" title="点击选择周次">
+      <div class="week-card-normal" id="weekCardNormal">
         <h1 id="weekTitle">—</h1>
         <p class="sub" id="weekRange">—</p>
+        <p class="hint">点这张卡片，可以按周查看课表</p>
       </div>
-      <div class="week-nav">
-        <button class="btn ghost" id="prevWeek">← 上一周</button>
-        <button class="btn ghost" id="curWeek">回到本周</button>
-        <button class="btn ghost" id="nextWeek">下一周 →</button>
+
+      <div class="week-picker" id="weekPicker">
+        <div class="wp-title">
+          <h1 id="wpTitle">—</h1>
+          <p class="sub" id="wpRange">—</p>
+        </div>
+        <div class="wp-actions">
+          <button class="btn" id="wpBack" type="button" disabled>回到本周</button>
+          <button class="btn primary" id="wpConfirm" type="button">确定</button>
+        </div>
+        <div class="wp-dots-wrap" id="wpDotsWrap"><div class="wp-cells" id="wpDots"></div></div>
       </div>
     </header>
 
@@ -429,6 +442,11 @@
   </section>
 
 </main>
+
+<!-- 选周浮层的遮罩：浮层开着时把界面其余全部内容压暗、挡掉点击
+     （点它本身 = 取消选择，见 page-week.js）。放 body 层，
+     不受任何祖先 overflow/定位影响，盖住侧栏和内容区。 -->
+<div class="wp-backdrop" id="wpBackdrop"></div>
 
 <!-- ============ 弹窗 ============ -->
 <div class="modal-mask" id="modalMask">

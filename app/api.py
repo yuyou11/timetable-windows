@@ -291,6 +291,7 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
         # （第 5 周的高数 / 形势与政策 / 大模型，第 2 周的程序设计 / 思想道德），
         # 而旧的 19 门课恰好全在周一到周五，所以一直没被发现。
         days = []
+        today = date.today()
         for i in range(1, WEEK_DAYS + 1):
             dt = monday + timedelta(days=i - 1)
             day_type = engine.day_type(dt, week, courses, config)
@@ -300,6 +301,8 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
                 "dateText": f"{dt.month}/{dt.day}",
                 "dayType": day_type.value,
                 "shortType": _short_day_type(day_type),
+                # 课表页高亮「当天」这一列；翻到别的周时七天全是 False
+                "isToday": dt == today,
             })
 
         # 行结构来自「节数信息」（store.periods，默认 "442"）：一天的小节数
@@ -363,6 +366,63 @@ class Api(BallMixin, SettingsMixin, CoursesMixin, TemplatesMixin, TransferMixin)
             "rangeText": f"{monday.month}.{monday.day} – {sunday.month}.{sunday.day}",
             "days": days,
             "rows": rows,
+        }
+
+    def get_week_overview(self) -> dict[str, Any]:
+        """课表页「选周浮层」的底料：每一周有没有课、日期范围、点阵形状。
+
+        浮层下三分之一是各周的**点阵预览图**（对齐手机版）：每张图 7 列
+        小圆点 = 一周七天，每行是两小节合成的「大节」（442 → 10 小节
+        → 5 行），亮色 = 那个时段有课，灰色 = 没课 —— 一眼看出这周的
+        「形状」。pattern[日][行] 用 "0"/"1" 字符串存，前端直接铺格子。
+
+        「有没有课」必须和 get_week 取格子是**同一条判据**
+        （c.enabled 且 week in c.weeks）—— 口径一旦分家，就会出现
+        「点阵说这周有课、翻过去却是张空表」的怪现象。点阵的点亮判据
+        是它的逐格版：节点区间重叠（和 get_week 的 hit 条件一致）。
+
+        todayWeek 是未钳位的今天周次（开学前会是 0 或负数），前端拿它
+        换算 weekOffset（get_week 的 offset 相对它偏移）；
+        currentWeek 是钳到 1..总周数 的「本周」，浮层的「回到本周」按钮
+        按它判禁用 —— 必须钳位，否则开学前它是 0，预览图里根本没有第 0 周。
+        """
+        courses = self.store.courses()
+        this_week = self.store.week_of(date.today())
+        total = self.store.total_weeks
+        start = self.store.term_start
+        node_limit = self.store.node_count
+        pair_rows = (node_limit + 1) // 2   # 两小节并作一点：10 节 → 5 行
+
+        weeks = []
+        for w in range(1, total + 1):
+            monday = start + timedelta(days=(w - 1) * 7)
+            sunday = monday + timedelta(days=6)
+
+            pattern = []
+            for dow in range(1, WEEK_DAYS + 1):
+                row = ""
+                for p in range(pair_rows):
+                    lo, hi = 2 * p + 1, min(2 * p + 2, node_limit)
+                    lit = any(
+                        c.enabled and c.day_of_week == dow and w in c.weeks
+                        and c.start_node <= hi and c.end_node >= lo
+                        for c in courses
+                    )
+                    row += "1" if lit else "0"
+                pattern.append(row)
+
+            weeks.append({
+                "week": w,
+                "hasCourse": any(c.enabled and w in c.weeks for c in courses),
+                "rangeText": f"{monday.month}.{monday.day} – {sunday.month}.{sunday.day}",
+                "pattern": pattern,
+            })
+
+        return {
+            "todayWeek": this_week,
+            "currentWeek": max(1, min(total, this_week)),
+            "totalWeeks": total,
+            "weeks": weeks,
         }
 
     # ============================================================

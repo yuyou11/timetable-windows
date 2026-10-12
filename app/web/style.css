@@ -398,7 +398,167 @@ h2 { font-size: 15px; font-weight: 600; }
 
 /* ---------------- 课表网格 ---------------- */
 
-.week-nav { display: flex; gap: 6px; }
+/* 页头去掉翻周按钮后只剩标题 —— 标题卡片本身就是「选周」的按钮 */
+.week-head { justify-content: center; text-align: center; }
+
+/* 页头卡片是个大按钮：hover 描边提示「可以点」。
+   ⚠️ hover 只动描边不动 transform —— 卡片展开时要读它的 getBoundingClientRect
+   定位，任何常驻位移都会让起点算偏。 */
+.week-card {
+  cursor: pointer;
+  user-select: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.week-card:hover { border-color: var(--accent); }
+
+/* 正常态的内容层（标题+日期+提示）：展开时先淡出，给浮层让位 */
+.week-card-normal { transition: opacity .18s ease; }
+.week-card-normal.fade-out { opacity: 0; }
+
+/* 展开态：固定定位、几何（left/top/width/height）由 JS 用行内样式逐帧过渡。
+   坐标是「根 CSS 像素」（除以根 zoom），见 page-week.js 的 wpZoom() 说明。
+   ⚠️ WP_MS 常量（page-week.js）必须和下面 .animating 的时长一致。 */
+.week-card.picking {
+  position: fixed;
+  margin: 0;
+  z-index: 95;              /* 遮罩(90)之上、弹窗(100)之下 */
+  cursor: default;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .35);
+}
+/* 展开态不再是「按钮」，hover 的按钮描边要摘掉 */
+.week-card.picking:hover { border-color: var(--border); }
+.week-card.animating {
+  transition:
+    left .44s cubic-bezier(.22, 1, .36, 1),
+    top .44s cubic-bezier(.22, 1, .36, 1),
+    width .44s cubic-bezier(.22, 1, .36, 1),
+    height .44s cubic-bezier(.22, 1, .36, 1),
+    box-shadow .44s ease;
+}
+
+/* 浮层开着时背景仍可滚？不 —— 滚动被事件层拦住（page-week.js 的
+   weekScrollLock）。不能用 overflow:hidden 锁：那会把滚动条抽走，
+   内容区一夜变宽，关浮层时滚动条弹回来，页头咔哒一跳，
+   缩回动画看着就是错的。滚动条留在原地，布局零位移。 */
+
+/* 遮罩：其余全部内容压暗 + 不可点。点它本身 = 取消。 */
+.wp-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(15, 23, 42, .45);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .4s ease;
+}
+.wp-backdrop.show { opacity: 1; pointer-events: auto; }
+
+/* 浮层内容：三段绝对定位，铺满整张展开的卡片 ——
+   标题压在 1/3 线上、按钮在正中、点阵占下三分之一。 */
+.week-picker {
+  position: absolute;
+  inset: 0;
+  display: none;
+  opacity: 0;
+  transition: opacity .25s ease;
+}
+.week-picker.show { opacity: 1; }
+
+.wp-title {
+  position: absolute;
+  left: 0; right: 0;
+  top: 33.33%;
+  transform: translateY(-50%);
+  text-align: center;
+  transition: opacity .17s ease, transform .17s ease;
+}
+/* 切周时标题淡出下滑再换字回来（JS 加/摘 switching）。
+   ⚠️ 不能叫 .switch —— 那是设置页开关组件的类名（42×24 的 inline-block），
+   撞上后标题会被压成 42px 宽贴在最左边、中文逐字换行成竖列。 */
+.wp-title.switching { opacity: 0; transform: translateY(-50%) translateY(10px); }
+.wp-title h1 { font-size: 30px; }
+.wp-title .sub { font-size: 14px; margin-top: 8px; }
+
+.wp-actions {
+  position: absolute;
+  left: 0; right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  justify-content: center;
+  gap: 18px;
+}
+/* 两个按钮同尺寸：宽度钉死、内边距对称，字多字少都一样大 */
+.wp-actions .btn { min-width: 148px; padding: 11px 0; font-size: 14px; }
+
+/* 「回到本周」在已看本周时禁用（灰色不可点） */
+.btn:disabled { opacity: .45; cursor: default; }
+.btn:disabled:hover { border-color: var(--border); background: transparent; }
+.btn.primary:disabled:hover { filter: none; background: var(--accent); }
+
+/* 点阵预览：每张预览图 = 一周的形状 —— 7 列小圆点（一列一天），
+   每行是两小节合成的「大节」，亮绿 = 那个时段有课，灰 = 没课；
+   周数标在矩阵下面。位置（含随远近收窄的间距）、缩放、透明度
+   全由 page-week.js 的 weekLayoutCells 写进 transform/opacity，
+   靠同一条 CSS 过渡滑到位 —— 换周时每张滑向自己的新位置。 */
+.wp-dots-wrap {
+  position: absolute;
+  left: 0; right: 0;
+  top: 58%; bottom: 0;      /* 比下三分之一（66.66%）更高更大 */
+  /* clip 而不是 hidden：hidden 仍是滚动容器，点按/聚焦可能把它滚跑，
+     长条整体就偏了；clip 根本不可滚。老内核不认 clip 会退回 hidden。 */
+  overflow: hidden;
+  overflow: clip;
+}
+.wp-cells {
+  position: absolute;
+  inset: 0;
+}
+
+/* 一张预览图：锚在容器正中（left/top 50%），transform 里的
+   translate(calc(-50% + 环距px), -50%) 把自己摆到该在的位置，
+   scale 出近大远小 —— 切周时同一条过渡滑到新位置。 */
+.wp-cell {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  will-change: transform;
+  transition: transform .44s cubic-bezier(.22, 1, .36, 1), opacity .35s ease;
+}
+.wp-matrix {
+  display: grid;
+  grid-template-columns: repeat(7, 13px);
+  grid-auto-rows: 13px;
+  gap: 2px;
+}
+/* 灰点 = 没课，绿点 = 有课（对齐手机版的点阵配色） */
+.wp-matrix .pd {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: var(--border);
+}
+.wp-matrix .pd.lit { background: #22c55e; }
+
+/* 选中的（居中那张）：绿点带一圈柔光，周数提亮 ——
+   「选了哪周」比「这周有没有课」信息优先级更高 */
+.wp-cell.sel .wp-matrix { filter: drop-shadow(0 4px 14px rgba(34, 197, 94, .4)); }
+.wp-num {
+  font-size: 14px;   /* 整张预览图被 transform: scale 缩放，这里写基准值 */
+  font-weight: 600;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.wp-cell.sel .wp-num { color: var(--text); }
 
 .day-hints {
   display: flex;
@@ -424,6 +584,24 @@ h2 { font-size: 15px; font-weight: 600; }
   font-weight: 600;
   color: var(--text-dim);
   text-align: center;
+}
+
+/* 当天（isToday）：表头亮成主色徽章，整列的空格换成淡主色底，
+   上方日型提示行同步 —— 一眼找到「今天在第几列」。
+   有课的格子本来就是主色系（带边框），不再加重。 */
+.grid th.today {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 8px;
+}
+
+.grid td.cell.today .cell-inner:not(.has) { background: var(--accent-soft); }
+
+.day-hints span.today {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
 }
 
 .grid td { vertical-align: middle; }
@@ -1012,15 +1190,25 @@ body.has-bg {
 .modal-mask {
   position: fixed;
   inset: 0;
-  display: none;
+  display: flex;
   align-items: center;
   justify-content: center;
   background: rgba(15, 17, 21, .5);
   backdrop-filter: blur(2px);
   z-index: 100;
+  /* 显隐用 opacity+visibility，不用 display —— display 是硬切换，
+     过渡动画根本没机会跑。visibility 可以过渡：隐藏时延迟到淡出
+     结束才生效（否则淡出第一帧就没了），显示时立即生效。 */
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .22s ease, visibility 0s linear .22s;
 }
 
-.modal-mask.show { display: flex; }
+.modal-mask.show {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity .22s ease;
+}
 
 .modal {
   width: min(560px, calc(100vw - 48px));
@@ -1031,6 +1219,16 @@ body.has-bg {
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: 0 12px 40px rgba(0, 0, 0, .25);
+  /* 入场：从下方 16px 浮上来 + 轻微放大归位，和选周浮层同一条
+     缓动曲线；退场沿原路沉回去，跟着遮罩一起淡出 */
+  transform: translateY(16px) scale(.96);
+  opacity: 0;
+  transition: transform .3s cubic-bezier(.22, 1, .36, 1), opacity .22s ease;
+}
+
+.modal-mask.show .modal {
+  transform: none;
+  opacity: 1;
 }
 
 .modal h3 { font-size: 16px; margin-bottom: 10px; }

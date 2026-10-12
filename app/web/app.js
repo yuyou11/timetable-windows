@@ -232,10 +232,18 @@ function bindEvents() {
     renderTextColor('', true);
   };
 
-  // 课表翻周
-  $('prevWeek').onclick = () => { STATE.weekOffset--; renderWeek(); };
-  $('nextWeek').onclick = () => { STATE.weekOffset++; renderWeek(); };
-  $('curWeek').onclick = () => { STATE.weekOffset = 0; renderWeek(); };
+  // 课表页：页头卡片（标题那张）点开「选周」浮层（交互逻辑全在 page-week.js）。
+  // 遮罩点击 / ESC = 取消，网格不动；「确定」才落周次。
+  $('weekCard').onclick = () => weekOpenPicker();
+  $('weekCard').onkeydown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); weekOpenPicker(); }
+  };
+  $('wpBack').onclick = () => weekBackToCurrent();
+  $('wpConfirm').onclick = () => weekConfirm();
+  $('wpBackdrop').onclick = () => weekClosePicker(false);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') weekClosePicker(false);
+  });
 
   // 课程
   $('addCourse').onclick = () => courseDialog(null);
